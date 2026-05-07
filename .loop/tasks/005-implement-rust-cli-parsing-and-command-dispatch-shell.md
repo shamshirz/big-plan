@@ -1,14 +1,14 @@
 ---
 id: 005
 title: Implement Rust CLI parsing and command dispatch shell
-status: pending
+status: complete
 depends_on: []
 created_at: 2026-05-07T18:32:47Z
-started_at: null
-completed_at: null
-duration_seconds: null
-input_tokens: null
-output_tokens: null
+started_at: 2026-05-07T18:42:38Z
+completed_at: 2026-05-07T18:48:48Z
+duration_seconds: 376
+input_tokens: 16
+output_tokens: 27306
 model: null
 commit_sha: null
 ---
@@ -33,3 +33,5 @@ Implement Rust command parsing and top-level command dispatch according to the f
 
 ## Completion notes
 [Fill this section before running `loop complete`.]
+
+Created loop-rs/src/cli.rs (manual arg parsing → Command enum, 22 tests), loop-rs/src/repository.rs (TaskRepository trait + LoopError), loop-rs/src/commands.rs (all 8 commands dispatch against the trait), and updated loop-rs/src/main.rs with dispatch wiring and StubRepository placeholder. All 48 tests pass (cargo test). Binary behavior verified: loop/-h/--help produce identical help at exit 0; unknown commands, missing args, and flag errors emit correct error messages to stderr at exit 1 per CLI contract. run command stubs subprocess invocation pending the orchestrator task.
