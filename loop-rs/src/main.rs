@@ -2,34 +2,11 @@ pub mod cli;
 pub mod commands;
 pub mod domain;
 pub mod repository;
+pub mod sqlite_repo;
 
 use cli::{Command, ParseError, ReadTarget};
-use repository::{LoopError, TaskRepository};
-
-struct StubRepository;
-
-impl TaskRepository for StubRepository {
-    fn initialize(&self) -> Result<(), LoopError> {
-        Err(LoopError::Io(
-            "SQLite repository not yet implemented — see task 006".to_owned(),
-        ))
-    }
-    fn add_task(&self, _title: &str) -> Result<domain::Task, LoopError> {
-        Err(LoopError::NotInitialized)
-    }
-    fn list_tasks(&self) -> Result<Vec<domain::Task>, LoopError> {
-        Err(LoopError::NotInitialized)
-    }
-    fn get_task(&self, id: &str) -> Result<domain::Task, LoopError> {
-        Err(LoopError::TaskNotFound(id.to_owned()))
-    }
-    fn update_task(&self, _task: domain::Task) -> Result<domain::Task, LoopError> {
-        Err(LoopError::NotInitialized)
-    }
-    fn read_plan(&self) -> Result<String, LoopError> {
-        Err(LoopError::NotInitialized)
-    }
-}
+use repository::TaskRepository;
+use sqlite_repo::SqliteRepository;
 
 fn main() {
     let cmd = match cli::parse() {
@@ -65,7 +42,8 @@ fn main() {
         }
     };
 
-    let repo = StubRepository;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let repo = SqliteRepository::new(&cwd);
     let exit_code = dispatch(cmd, &repo);
     std::process::exit(exit_code);
 }
