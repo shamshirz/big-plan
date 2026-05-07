@@ -9,28 +9,32 @@ import sys
 
 from . import git
 from .storage import (
+    AGENT_PROJECT_FILE,
+    PLAN_FILE,
     append_log,
     completion_notes_excerpt,
     next_pending_task,
     parse_task_file,
     set_current_symlink,
+    TaskFile,
     utc_now_iso,
     write_task,
 )
 
 
-AGENT_PROMPT = """You are working on a single task in a multi-task plan.
+DEFAULT_UNIVERSAL_GUIDANCE = """You are working on exactly one task in a multi-task plan.
 
-1. Read your current task with: `loop read current`.
-2. Read the overall plan with: `loop read plan`.
-3. If your task references other task IDs, read them with: `loop read <id>`.
-4. Do the work. Use your normal tools to read code, edit files, run tests.
-5. Before finishing, edit the "Completion notes" section of your task file.
-6. When done, run `loop complete`. Then exit.
+Execution contract:
+- Stay focused on this task only.
+- Make concrete code changes, then run the relevant validation commands.
+- Keep edits minimal and safe; avoid unrelated refactors.
+- Update the task's "Completion notes" with what changed and how you verified it.
+- Mark the task complete when done.
 
-You do not need to commit. The orchestrator commits after you exit.
-You do not need to manage branches.
-Do not inspect the .loop storage directory directly; use `loop read`.
+Operational rules:
+- Do not manage branches.
+- Do not create commits; the orchestrator commits after you exit.
+- Prefer deterministic validation steps over broad ad-hoc exploration.
 """
 
 
@@ -40,13 +44,41 @@ def _duration_seconds(started_at_iso: str) -> int:
     return int((now - started).total_seconds())
 
 
-def _spawn_agent(task_id: str) -> tuple[int, dict | None]:
+def _read_project_context() -> str:
+    if AGENT_PROJECT_FILE.exists():
+        return AGENT_PROJECT_FILE.read_text(encoding="utf-8").strip()
+    return PLAN_FILE.read_text(encoding="utf-8").strip()
+
+
+def _build_agent_prompt(task: TaskFile, loop_bin_path: str) -> str:
+    task_text = task.path.read_text(encoding="utf-8").strip()
+    project_context = _read_project_context()
+    return f"""## Universal Guidance
+{DEFAULT_UNIVERSAL_GUIDANCE.strip()}
+
+## Project-Specific Context
+{project_context}
+
+## Task-Specific Context
+{task_text}
+
+## Required Commands
+Use these commands (from repo root):
+- `python3 "{loop_bin_path}" read current`
+- `python3 "{loop_bin_path}" read plan`
+- `python3 "{loop_bin_path}" read <id>`
+- `python3 "{loop_bin_path}" complete --notes "<short summary>"`
+"""
+
+
+def _spawn_agent(task: TaskFile, loop_bin_path: str) -> tuple[int, dict | None]:
     env = os.environ.copy()
-    env["LOOP_TASK_ID"] = task_id
+    env["LOOP_TASK_ID"] = str(task.frontmatter["id"])
     cmd = [
         "claude",
         "-p",
-        AGENT_PROMPT,
+        _build_agent_prompt(task, loop_bin_path),
+        "--verbose",
         "--output-format",
         "stream-json",
         "--dangerously-skip-permissions",
@@ -74,6 +106,7 @@ def _spawn_agent(task_id: str) -> tuple[int, dict | None]:
 
 
 def run_loop() -> int:
+    loop_bin_path = str(Path(sys.argv[0]).resolve())
     while True:
         task = next_pending_task()
         if task is None:
@@ -86,7 +119,7 @@ def run_loop() -> int:
         write_task(task)
         set_current_symlink(task)
 
-        exit_code, result_event = _spawn_agent(task_id)
+        exit_code, result_event = _spawn_agent(task, loop_bin_path)
 
         refreshed = parse_task_file(task.path)
         if refreshed.frontmatter.get("status") != "complete" or exit_code != 0:

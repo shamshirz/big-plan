@@ -1,41 +1,55 @@
-# big-plan
+# loop
 
-`big-plan` is a lightweight CLI loop for running coding tasks as separate agent sessions, with state tracked in files and commits.
-
-## Core idea
-
-- Keep shared state in `.loop/` files (plan + tasks), not in a long-lived chat context.
-- Let a planner define tasks, then let `loop run` execute them one by one.
-- Require each task agent to write completion notes and mark itself complete.
-- Let the orchestrator commit after each successful task.
+`loop` is a project-local CLI that orchestrates task-focused agent sessions backed by SQLite.
+Install with `cargo install loop` and run from any project directory.
 
 ## Quick start
 
 ```bash
-# from repo root
-./loop init
-./loop add "First task title"
-./loop status
-./loop run
+loop init                        # bootstrap .loop/ state in current directory
+loop add "Scaffold Rust crate"   # add a pending task
+loop status                      # list tasks
+loop run                         # execute pending tasks via agent sessions
 ```
 
-Inside an executing agent session:
+Inside an agent session:
 
 ```bash
-./loop read current
-./loop read plan
-./loop complete
+loop read plan                   # print plan context
+loop read current                # print the running task
+loop complete --notes "Done."    # mark task complete
 ```
 
-## Planner -> task loop workflow
+## Command reference
 
-1. A planning agent writes/updates `.loop/plan.md` and creates tasks.
-2. Tasks are represented by IDs and markdown files in `.loop/tasks/`.
-3. Run `./loop run` to execute pending tasks sequentially.
-4. Each task agent reads context with `./loop read plan` and `./loop read current`, implements the task, updates completion notes, then runs `./loop complete`.
-5. The orchestrator records usage/time metadata and commits task results.
+| Command | Description |
+|---------|-------------|
+| `loop init` | Initialize `.loop/` state and SQLite DB in the current directory |
+| `loop add "<title>"` | Add a new pending task |
+| `loop status` | List all tasks with ID, status, and title |
+| `loop show <id>` | Print full task detail |
+| `loop read plan\|current\|<id>` | Print raw planning or task text for agent use |
+| `loop run` | Execute pending tasks sequentially via agent sessions |
+| `loop complete [--notes "..."]` | Mark the current task complete |
+| `loop reset <id>` | Return a task to pending and clear metrics |
+
+`loop -h` prints concise help. `loop <command> -h` prints command-specific help.
+
+## How it works
+
+1. `loop init` creates `.loop/loop.db` (SQLite) and context template files.
+2. Add tasks with `loop add`; each gets a sequential ID and `pending` status.
+3. `loop run` executes pending tasks one at a time. For each task it assembles an agent prompt from universal guidance + `.loop/agent-project.md` + task-specific context, then spawns an agent session.
+4. The agent reads context via `loop read`, does the work, then calls `loop complete --notes "..."`.
+5. The orchestrator records metrics and commits after each successful task.
+
+## Project context customization
+
+- **`.loop/agent-project.md`** — stable project guidance (architecture, test commands, coding standards). Included in every agent prompt.
+- **`.loop/plan.md`** — evolving release plan, readable via `loop read plan`.
+- **`.loop/cli-contract.md`** — authoritative CLI behavior contract for implementors.
 
 ## Reference docs
 
-- `loop-plan.md` — implementation/design spec
-- `SKILL.md` — reusable prompt and execution pattern for planner/executor agents
+- `.loop/plan.md` — release/spec plan
+- `.loop/cli-contract.md` — explicit CLI behavior contract (outputs, errors, exit codes)

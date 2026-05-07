@@ -11,6 +11,7 @@ from typing import Any
 LOOP_DIR = Path(".loop")
 TASKS_DIR = LOOP_DIR / "tasks"
 PLAN_FILE = LOOP_DIR / "plan.md"
+AGENT_PROJECT_FILE = LOOP_DIR / "agent-project.md"
 CURRENT_FILE = LOOP_DIR / "CURRENT"
 LOG_FILE = LOOP_DIR / "log.jsonl"
 
@@ -59,6 +60,16 @@ def init_layout() -> None:
         "Describe the overall objective and strategy here.\n\n"
         "## Milestones\n\n"
         "- [ ] Add tasks with `loop add \"...\"`\n",
+        encoding="utf-8",
+    )
+    AGENT_PROJECT_FILE.write_text(
+        "# Project Context For Loop Agents\n\n"
+        "Add stable, repo-specific guidance every task agent should see.\n\n"
+        "Examples:\n"
+        "- architecture constraints\n"
+        "- coding standards\n"
+        "- required test commands\n"
+        "- deployment or safety rules\n",
         encoding="utf-8",
     )
     LOG_FILE.touch()

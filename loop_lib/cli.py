@@ -105,7 +105,7 @@ def cmd_reset(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="loop", description="Task-loop orchestrator")
+    parser = argparse.ArgumentParser(prog="loop", description="Simple task loop CLI.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_init = sub.add_parser("init", help="Initialize loop storage and branch")
@@ -141,6 +141,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    if not argv:
+        argv = ["-h"]
+
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
