@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod commands;
 pub mod domain;
+pub mod render;
 pub mod repository;
 pub mod sqlite_repo;
 

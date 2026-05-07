@@ -4,6 +4,7 @@ use crate::domain::{
     check_no_running_task, current_running, next_pending, transition_complete, transition_reset,
     CompletionData, DomainError,
 };
+use crate::render::{render_task_detail, render_task_markdown};
 use crate::repository::{LoopError, TaskRepository};
 
 pub fn help() -> i32 {
@@ -93,61 +94,7 @@ pub fn status(repo: &dyn TaskRepository) -> i32 {
 pub fn show(repo: &dyn TaskRepository, id: &str) -> i32 {
     match repo.get_task(id) {
         Ok(task) => {
-            println!("ID:      {}", task.id);
-            println!("Title:   {}", task.title);
-            println!("Status:  {}", task.status);
-            println!("Created: {}", task.created_at.format("%Y-%m-%dT%H:%M:%SZ"));
-            println!();
-            println!("Description:");
-            println!(
-                "{}",
-                if task.description_md.is_empty() { "(none)" } else { &task.description_md }
-            );
-            println!();
-            println!("Context:");
-            println!(
-                "{}",
-                if task.context_md.is_empty() { "(none)" } else { &task.context_md }
-            );
-            println!();
-            println!("Acceptance criteria:");
-            println!(
-                "{}",
-                if task.acceptance_md.is_empty() { "(none)" } else { &task.acceptance_md }
-            );
-            println!();
-            println!("Completion notes:");
-            println!(
-                "{}",
-                if task.completion_notes_md.is_empty() {
-                    "(none)"
-                } else {
-                    &task.completion_notes_md
-                }
-            );
-            // Runtime metrics appended only when present
-            if let Some(started_at) = task.started_at {
-                println!("Started:   {}", started_at.format("%Y-%m-%dT%H:%M:%SZ"));
-            }
-            if let Some(completed_at) = task.completed_at {
-                println!("Completed: {}", completed_at.format("%Y-%m-%dT%H:%M:%SZ"));
-            }
-            if let Some(duration) = task.duration_seconds {
-                println!("Duration:  {}s", duration);
-            }
-            if let Some(model) = &task.model {
-                println!("Model:     {}", model);
-            }
-            if task.input_tokens.is_some() || task.output_tokens.is_some() {
-                println!(
-                    "Tokens in/out: {} / {}",
-                    task.input_tokens.unwrap_or(0),
-                    task.output_tokens.unwrap_or(0)
-                );
-            }
-            if let Some(sha) = &task.commit_sha {
-                println!("Commit:    {}", sha);
-            }
+            print!("{}", render_task_detail(&task));
             0
         }
         Err(LoopError::NotInitialized) => {
@@ -200,7 +147,7 @@ pub fn read_current(repo: &dyn TaskRepository) -> i32 {
     };
     match current_running(&tasks) {
         Ok(task) => {
-            print!("{}", format_task_markdown(task));
+            print!("{}", render_task_markdown(task));
             0
         }
         Err(DomainError::NoRunningTask) => {
@@ -217,7 +164,7 @@ pub fn read_current(repo: &dyn TaskRepository) -> i32 {
 pub fn read_task(repo: &dyn TaskRepository, id: &str) -> i32 {
     match repo.get_task(id) {
         Ok(task) => {
-            print!("{}", format_task_markdown(&task));
+            print!("{}", render_task_markdown(&task));
             0
         }
         Err(LoopError::NotInitialized) => {
@@ -354,37 +301,6 @@ pub fn reset(repo: &dyn TaskRepository, id: &str) -> i32 {
             1
         }
     }
-}
-
-fn format_task_markdown(task: &crate::domain::Task) -> String {
-    let mut out = String::new();
-    out.push_str(&format!("# Task {}: {}\n\n", task.id, task.title));
-    out.push_str(&format!("Status: {}\n", task.status));
-    out.push_str(&format!(
-        "Created: {}\n",
-        task.created_at.format("%Y-%m-%dT%H:%M:%SZ")
-    ));
-    if !task.description_md.is_empty() {
-        out.push_str("\n## Description\n");
-        out.push_str(&task.description_md);
-        out.push('\n');
-    }
-    if !task.context_md.is_empty() {
-        out.push_str("\n## Context\n");
-        out.push_str(&task.context_md);
-        out.push('\n');
-    }
-    if !task.acceptance_md.is_empty() {
-        out.push_str("\n## Acceptance criteria\n");
-        out.push_str(&task.acceptance_md);
-        out.push('\n');
-    }
-    if !task.completion_notes_md.is_empty() {
-        out.push_str("\n## Completion notes\n");
-        out.push_str(&task.completion_notes_md);
-        out.push('\n');
-    }
-    out
 }
 
 fn truncate(s: &str, max_chars: usize) -> String {
