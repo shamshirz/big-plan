@@ -10,7 +10,7 @@ duration_seconds: 76
 input_tokens: 8
 output_tokens: 4544
 model: null
-commit_sha: null
+commit_sha: 030286f972d63a95407df83adc0d249cc5d19319
 ---
 
 # Task 002: Finalize public CLI API and user-facing behavior contract

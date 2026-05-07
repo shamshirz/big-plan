@@ -1,3 +1,4 @@
 {"agent_exit_code": 1, "event": "task_failed", "task_id": "001", "timestamp": "2026-05-07T18:31:50Z"}
 {"agent_exit_code": 1, "event": "task_failed", "task_id": "001", "timestamp": "2026-05-07T18:32:32Z"}
 {"agent_exit_code": 1, "event": "task_failed", "task_id": "002", "timestamp": "2026-05-07T18:34:04Z"}
+{"commit_sha": "030286f972d63a95407df83adc0d249cc5d19319", "duration_seconds": 76, "event": "task_complete", "input_tokens": 8, "output_tokens": 4544, "task_id": "002", "timestamp": "2026-05-07T18:37:09Z"}
