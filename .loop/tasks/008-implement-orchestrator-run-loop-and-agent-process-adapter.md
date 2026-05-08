@@ -1,10 +1,10 @@
 ---
 id: 008
 title: Implement orchestrator run loop and agent process adapter
-status: pending
+status: failed
 depends_on: []
 created_at: 2026-05-07T18:32:47Z
-started_at: null
+started_at: 2026-05-08T00:25:23Z
 completed_at: null
 duration_seconds: null
 input_tokens: null
