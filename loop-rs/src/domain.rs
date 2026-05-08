@@ -620,6 +620,83 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn fail_completed_fails() {
+        let task = pending_task();
+        let task = transition_start(task, ts(2026, 5, 7, 10, 0, 0)).unwrap();
+        let data = CompletionData {
+            notes: String::new(),
+            completed_at: ts(2026, 5, 7, 10, 1, 0),
+            input_tokens: None,
+            output_tokens: None,
+            model: None,
+            commit_sha: None,
+        };
+        let task = transition_complete(task, data).unwrap();
+        assert!(matches!(
+            transition_fail(task, ts(2026, 5, 7, 10, 2, 0)),
+            Err(DomainError::InvalidTransition { from: TaskStatus::Complete, to: TaskStatus::Failed })
+        ));
+    }
+
+    #[test]
+    fn complete_failed_fails() {
+        let task = pending_task();
+        let task = transition_start(task, ts(2026, 5, 7, 10, 0, 0)).unwrap();
+        let task = transition_fail(task, ts(2026, 5, 7, 10, 1, 0)).unwrap();
+        let data = CompletionData {
+            notes: "retry".to_owned(),
+            completed_at: ts(2026, 5, 7, 10, 2, 0),
+            input_tokens: None,
+            output_tokens: None,
+            model: None,
+            commit_sha: None,
+        };
+        assert!(matches!(
+            transition_complete(task, data),
+            Err(DomainError::InvalidTransition { from: TaskStatus::Failed, to: TaskStatus::Complete })
+        ));
+    }
+
+    #[test]
+    fn complete_empty_new_notes_keeps_prior_completion_notes_in_db_shape() {
+        let mut task = pending_task();
+        task.completion_notes_md = "Draft.".to_owned();
+        let task = transition_start(task, ts(2026, 5, 7, 10, 0, 0)).unwrap();
+        let data = CompletionData {
+            notes: String::new(),
+            completed_at: ts(2026, 5, 7, 10, 1, 0),
+            input_tokens: None,
+            output_tokens: None,
+            model: None,
+            commit_sha: None,
+        };
+        let task = transition_complete(task, data).unwrap();
+        assert_eq!(task.completion_notes_md, "Draft.");
+    }
+
+    #[test]
+    fn start_failed_fails() {
+        let task = pending_task();
+        let task = transition_start(task, ts(2026, 5, 7, 10, 0, 0)).unwrap();
+        let task = transition_fail(task, ts(2026, 5, 7, 10, 1, 0)).unwrap();
+        assert!(matches!(
+            transition_start(task, ts(2026, 5, 7, 10, 2, 0)),
+            Err(DomainError::InvalidTransition { from: TaskStatus::Failed, to: TaskStatus::Running })
+        ));
+    }
+
+    #[test]
+    fn already_running_error_includes_formatted_task_id() {
+        let running = transition_start(Task::new(5, "a".to_owned(), ts(2026, 5, 7, 10, 0, 0)), ts(2026, 5, 7, 10, 1, 0)).unwrap();
+        let err = check_no_running_task(&[running]).unwrap_err();
+        if let DomainError::AlreadyRunning(id) = err {
+            assert_eq!(id, "005");
+        } else {
+            panic!("expected AlreadyRunning with task id string");
+        }
+    }
+
     // --- transition_reset ---
 
     #[test]

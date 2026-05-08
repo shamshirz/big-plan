@@ -65,7 +65,7 @@ impl SqliteRepository {
     }
 
     // Returns true if any migrations were applied, false if already up to date.
-    fn apply_migrations(conn: &mut Connection) -> Result<bool, LoopError> {
+    pub(crate) fn apply_migrations(conn: &mut Connection) -> Result<bool, LoopError> {
         let current: i32 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .map_err(|e| LoopError::Io(e.to_string()))?;
@@ -361,13 +361,21 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
 mod tests {
     use super::*;
     use crate::domain::{transition_complete, transition_reset, transition_start, CompletionData};
+    use rusqlite::Connection;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn temp_repo() -> (SqliteRepository, PathBuf) {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!("loop_sqlite_test_{n}"));
+        let ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let pid = std::process::id();
+        let root = std::env::temp_dir().join(format!(
+            "loop_sqlite_test_{pid}_{ns}_{n}"
+        ));
         std::fs::create_dir_all(&root).unwrap();
         let repo = SqliteRepository::new(&root);
         (repo, root)
@@ -577,5 +585,89 @@ mod tests {
         assert_eq!(ids.len(), 2);
         assert_eq!(ids[0].as_str(), "001");
         assert_eq!(ids[1].as_str(), "002");
+    }
+
+    #[test]
+    fn infer_event_type_maps_domain_transitions() {
+        assert_eq!(
+            infer_event_type(TaskStatus::Pending, TaskStatus::Running),
+            Some(EventType::Started)
+        );
+        assert_eq!(
+            infer_event_type(TaskStatus::Running, TaskStatus::Complete),
+            Some(EventType::Completed)
+        );
+        assert_eq!(
+            infer_event_type(TaskStatus::Running, TaskStatus::Failed),
+            Some(EventType::Failed)
+        );
+        assert_eq!(
+            infer_event_type(TaskStatus::Complete, TaskStatus::Pending),
+            Some(EventType::Reset)
+        );
+        assert_eq!(
+            infer_event_type(TaskStatus::Failed, TaskStatus::Pending),
+            Some(EventType::Reset)
+        );
+        assert_eq!(infer_event_type(TaskStatus::Pending, TaskStatus::Complete), None);
+        assert_eq!(
+            infer_event_type(TaskStatus::Running, TaskStatus::Running),
+            None
+        );
+    }
+
+    #[test]
+    fn apply_migrations_fresh_then_idempotent_second_call() {
+        let (_repo, root) = temp_repo();
+        let loop_dir = root.join(".loop");
+        std::fs::create_dir_all(&loop_dir).unwrap();
+        let db_path = loop_dir.join("loop.db");
+
+        let mut conn = Connection::open(&db_path).unwrap();
+        let v_before: i32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(v_before, 0);
+
+        assert!(SqliteRepository::apply_migrations(&mut conn).unwrap());
+
+        let v_after: i32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(v_after, super::LATEST_VERSION);
+
+        let table_count: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('tasks','events','config')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_count, 3);
+
+        assert!(!SqliteRepository::apply_migrations(&mut conn).unwrap());
+        drop(conn);
+
+        let repo = SqliteRepository::new(&root);
+        repo.add_task("after migrate").unwrap();
+        let tasks = repo.list_tasks().unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].title, "after migrate");
+    }
+
+    #[test]
+    fn apply_migrations_idempotent_when_schema_already_current() {
+        let (_repo, root) = init_repo();
+        let db_path = root.join(".loop").join("loop.db");
+        let mut conn = Connection::open(&db_path).unwrap();
+        assert!(!SqliteRepository::apply_migrations(&mut conn).unwrap());
+        assert!(!SqliteRepository::apply_migrations(&mut conn).unwrap());
+    }
+
+    #[test]
+    fn get_task_missing_digit_id_is_task_not_found() {
+        let (repo, _root) = init_repo();
+        repo.add_task("exists").unwrap();
+        assert!(matches!(repo.get_task("002"), Err(LoopError::TaskNotFound(_))));
     }
 }
