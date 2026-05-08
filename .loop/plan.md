@@ -108,3 +108,7 @@ Derived/canonical projections:
 4. Domain logic (functional core) for tasks/events/state transitions.
 5. Imperative shell orchestration for agent execution + git integration.
 6. Validation, docs, and release readiness for PoC.
+
+## PoC release readiness (checklist)
+
+Before announcing the PoC externally, walk the checklist in the root **`README.md`** (“PoC release checklist”): validation commands, known limitations (including current `loop run` / agent subprocess gaps), and planned next steps. Keep that section synchronized with `.loop/cli-contract.md` and the `loop-cli` crate metadata in `loop-rs/Cargo.toml`.

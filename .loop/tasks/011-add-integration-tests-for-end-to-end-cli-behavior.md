@@ -10,7 +10,7 @@ duration_seconds: 41
 input_tokens: null
 output_tokens: null
 model: null
-commit_sha: null
+commit_sha: 0f2b1c4a9961484d5a8c028de30eeb1f2fd1141f
 ---
 
 # Task 011: Add integration tests for end-to-end CLI behavior

@@ -13,12 +13,14 @@ This repository defines and evolves `loop`, a task-loop orchestration CLI. The a
 
 ## PoC Product Requirements
 
-- `cargo install` friendly executable.
+- `cargo install` friendly executable: Rust crate **`loop-cli`** produces binary **`loop`** (`cargo install --path loop-rs` from this repo, or `cargo install loop-cli` once published; see `README.md`).
 - Project-local hidden state in the cwd where CLI is invoked.
 - SQLite-backed task/event persistence within that hidden directory.
 - Sequential task execution with clear status and completion metadata.
 
-## Public CLI Surface (Target)
+## Public CLI Surface (PoC release)
+
+These commands are the supported user-facing API of the Rust PoC; keep outputs and errors aligned with `.loop/cli-contract.md`.
 
 - `loop init`
 - `loop add "<title>"`

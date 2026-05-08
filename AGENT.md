@@ -28,3 +28,14 @@ Examples of good separation:
 - Update task acceptance criteria.
 - Document completion notes with concrete changes and validation.
 - Avoid unrelated refactors.
+
+## Released loop workflow (Rust PoC)
+
+When this repository (or an installed `loop` binary from `loop-cli`) drives work:
+
+1. **Project bootstrap:** humans run `loop init` once per repo; context lives under `.loop/`.
+2. **Task intake:** `loop add "<title>"` appends a pending task; `loop status` / `loop show <id>` inspect the queue.
+3. **Agent session:** the runner ensures exactly one task is **`running`** (today this may be an external orchestrator while `loop run` agent spawning is still landing). Agents pull canonical text with `loop read plan`, `loop read current`, or `loop read <id>`.
+4. **Wrap-up:** agents run `loop complete --notes "..."` to persist notes and mark **complete**; use `loop reset <id>` to return a task to **pending** if work must be redone.
+
+Behavior details and error messages are specified in `.loop/cli-contract.md`; user-facing overview is in `README.md`.
