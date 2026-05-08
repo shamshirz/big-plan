@@ -91,7 +91,7 @@ fn run_fails_when_not_initialized() {
 }
 
 #[test]
-fn run_fails_when_pending_exists_agent_stub() {
+fn run_stalls_when_agent_does_not_complete() {
     let tmp = TempDir::new().expect("tempdir");
     init_project(tmp.path());
     let add = run_in(tmp.path(), &["add", "do the thing"]);
@@ -101,7 +101,84 @@ fn run_fails_when_pending_exists_agent_stub() {
     let (stdout, stderr) = output_utf8(&out);
     assert!(stdout.contains("Running task"));
     assert!(stdout.contains("do the thing"));
-    assert!(stderr.contains("agent subprocess invocation not yet implemented"));
+    assert!(stderr.contains("did not complete"));
+    assert!(stderr.contains("loop complete"));
+}
+
+#[test]
+fn run_completes_when_agent_shell_invokes_loop_complete() {
+    let tmp = TempDir::new().expect("tempdir");
+    init_project(tmp.path());
+    assert!(run_in(tmp.path(), &["add", "solo"]).status.success());
+    let exe = loop_bin().display().to_string();
+    let script = format!("exec '{exe}' complete --notes 'via run'");
+    let out = Command::new(loop_bin())
+        .current_dir(tmp.path())
+        .arg("run")
+        .env("LOOP_RUN_AGENT_SCRIPT", &script)
+        .output()
+        .expect("spawn run");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let (stdout, _) = output_utf8(&out);
+    assert!(stdout.contains("Running task"));
+    assert!(stdout.contains("Task 001 complete"));
+    let status = run_in(tmp.path(), &["status"]);
+    assert!(status.status.success());
+    let (listing, _) = output_utf8(&status);
+    assert!(listing.contains("001"));
+    assert!(listing.contains("complete"));
+}
+
+#[test]
+fn run_marks_failed_on_nonzero_agent_exit() {
+    let tmp = TempDir::new().expect("tempdir");
+    init_project(tmp.path());
+    assert!(run_in(tmp.path(), &["add", "flaky"]).status.success());
+    let out = Command::new(loop_bin())
+        .current_dir(tmp.path())
+        .arg("run")
+        .env("LOOP_RUN_AGENT_SCRIPT", "exit 2")
+        .output()
+        .expect("spawn run");
+    assert!(!out.status.success());
+    let (_, stderr) = output_utf8(&out);
+    assert!(stderr.contains("failed (exit code 2)"));
+    assert!(stderr.contains("Loop stopped"));
+    let show = run_in(tmp.path(), &["show", "001"]);
+    assert!(show.status.success());
+    let (detail, _) = output_utf8(&show);
+    assert!(detail.contains("Status:  failed"));
+}
+
+#[test]
+fn run_processes_multiple_pending_tasks_in_order() {
+    let tmp = TempDir::new().expect("tempdir");
+    init_project(tmp.path());
+    assert!(run_in(tmp.path(), &["add", "first"]).status.success());
+    assert!(run_in(tmp.path(), &["add", "second"]).status.success());
+    let exe = loop_bin().display().to_string();
+    let script = format!("exec '{exe}' complete --notes 'ok'");
+    let out = Command::new(loop_bin())
+        .current_dir(tmp.path())
+        .arg("run")
+        .env("LOOP_RUN_AGENT_SCRIPT", &script)
+        .output()
+        .expect("spawn run");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let (stdout, _) = output_utf8(&out);
+    assert!(stdout.contains("Task 001 complete"));
+    assert!(stdout.contains("Task 002 complete"));
+    let status = run_in(tmp.path(), &["status"]);
+    let (listing, _) = output_utf8(&status);
+    assert!(listing.lines().filter(|l| l.contains("complete")).count() >= 2);
 }
 
 #[test]

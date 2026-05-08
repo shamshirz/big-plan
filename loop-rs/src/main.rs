@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod commands;
 pub mod domain;
+pub mod orchestrator;
 pub mod render;
 pub mod repository;
 pub mod sqlite_repo;
@@ -45,21 +46,27 @@ fn main() {
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let repo = SqliteRepository::new(&cwd);
-    let exit_code = dispatch(cmd, &repo);
+    let exit_code = dispatch(cmd, &repo, &cwd);
     std::process::exit(exit_code);
 }
 
-fn dispatch(cmd: Command, repo: &dyn TaskRepository) -> i32 {
+fn dispatch(cmd: Command, repo: &dyn TaskRepository, cwd: &std::path::Path) -> i32 {
     match cmd {
         Command::Help => commands::help(),
         Command::Init => commands::init(repo),
         Command::Add { title } => commands::add(repo, &title),
         Command::Status => commands::status(repo),
         Command::Show { id } => commands::show(repo, &id),
-        Command::Read { target: ReadTarget::Plan } => commands::read_plan(repo),
-        Command::Read { target: ReadTarget::Current } => commands::read_current(repo),
-        Command::Read { target: ReadTarget::Task(id) } => commands::read_task(repo, &id),
-        Command::Run => commands::run(repo),
+        Command::Read {
+            target: ReadTarget::Plan,
+        } => commands::read_plan(repo),
+        Command::Read {
+            target: ReadTarget::Current,
+        } => commands::read_current(repo),
+        Command::Read {
+            target: ReadTarget::Task(id),
+        } => commands::read_task(repo, &id),
+        Command::Run => commands::run(repo, cwd),
         Command::Complete { notes } => commands::complete(repo, notes.as_deref()),
         Command::Reset { id } => commands::reset(repo, &id),
     }

@@ -1,8 +1,9 @@
+use std::path::Path;
+
 use chrono::Utc;
 
 use crate::domain::{
-    check_no_running_task, current_running, next_pending, transition_complete, transition_reset,
-    CompletionData, DomainError,
+    current_running, transition_complete, transition_reset, CompletionData, DomainError,
 };
 use crate::render::{render_task_detail, render_task_markdown};
 use crate::repository::{LoopError, TaskRepository};
@@ -76,7 +77,12 @@ pub fn status(repo: &dyn TaskRepository) -> i32 {
         Ok(tasks) => {
             println!("{:<5} {:<10} {}", "ID", "STATUS", "TITLE");
             for task in &tasks {
-                println!("{:<5} {:<10} {}", task.id, task.status, truncate(&task.title, 60));
+                println!(
+                    "{:<5} {:<10} {}",
+                    task.id,
+                    task.status,
+                    truncate(&task.title, 60)
+                );
             }
             0
         }
@@ -182,38 +188,8 @@ pub fn read_task(repo: &dyn TaskRepository, id: &str) -> i32 {
     }
 }
 
-pub fn run(repo: &dyn TaskRepository) -> i32 {
-    let tasks = match repo.list_tasks() {
-        Ok(t) => t,
-        Err(LoopError::NotInitialized) => {
-            eprintln!("error: loop not initialized — run `loop init` first");
-            return 1;
-        }
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
-    };
-
-    if let Err(DomainError::AlreadyRunning(id)) = check_no_running_task(&tasks) {
-        eprintln!(
-            "error: task {id} is already running — complete or reset it before running again"
-        );
-        return 1;
-    }
-
-    match next_pending(&tasks) {
-        None => {
-            println!("No pending tasks.");
-            0
-        }
-        Some(task) => {
-            println!("Running task {}: {}", task.id, task.title);
-            // Agent subprocess invocation is handled by the run orchestrator (future task).
-            eprintln!("error: agent subprocess invocation not yet implemented");
-            1
-        }
-    }
+pub fn run(repo: &dyn TaskRepository, project_root: &Path) -> i32 {
+    crate::orchestrator::execute_run(repo, project_root)
 }
 
 pub fn complete(repo: &dyn TaskRepository, notes: Option<&str>) -> i32 {
@@ -242,13 +218,14 @@ pub fn complete(repo: &dyn TaskRepository, notes: Option<&str>) -> i32 {
     };
 
     let task_id = running.id.clone();
+    let (input_tokens, output_tokens, model, commit_sha) = completion_metrics_from_env();
     let data = CompletionData {
         notes: notes.unwrap_or("").to_owned(),
         completed_at: Utc::now(),
-        input_tokens: None,
-        output_tokens: None,
-        model: None,
-        commit_sha: None,
+        input_tokens,
+        output_tokens,
+        model,
+        commit_sha,
     };
 
     let updated = match transition_complete(running, data) {
@@ -301,6 +278,25 @@ pub fn reset(repo: &dyn TaskRepository, id: &str) -> i32 {
             1
         }
     }
+}
+
+/// Runtime metadata optionally supplied via environment (typically by the agent session).
+fn completion_metrics_from_env() -> (Option<i64>, Option<i64>, Option<String>, Option<String>) {
+    let input_tokens = std::env::var("LOOP_COMPLETE_INPUT_TOKENS")
+        .ok()
+        .and_then(|s| s.trim().parse::<i64>().ok());
+    let output_tokens = std::env::var("LOOP_COMPLETE_OUTPUT_TOKENS")
+        .ok()
+        .and_then(|s| s.trim().parse::<i64>().ok());
+    let model = std::env::var("LOOP_COMPLETE_MODEL")
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
+    let commit_sha = std::env::var("LOOP_COMPLETE_COMMIT_SHA")
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
+    (input_tokens, output_tokens, model, commit_sha)
 }
 
 fn truncate(s: &str, max_chars: usize) -> String {

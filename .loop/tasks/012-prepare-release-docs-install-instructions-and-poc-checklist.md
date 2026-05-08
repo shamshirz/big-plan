@@ -10,7 +10,7 @@ duration_seconds: 55
 input_tokens: null
 output_tokens: null
 model: null
-commit_sha: null
+commit_sha: 482f3cb4616c4a0f88e66846fbf0b67466952267
 ---
 
 # Task 012: Prepare release docs, install instructions, and PoC checklist

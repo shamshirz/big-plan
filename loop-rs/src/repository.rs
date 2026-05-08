@@ -42,4 +42,6 @@ pub trait TaskRepository {
     fn get_task(&self, id: &str) -> Result<Task, LoopError>;
     fn update_task(&self, task: Task) -> Result<Task, LoopError>;
     fn read_plan(&self) -> Result<String, LoopError>;
+    /// Contents of `.loop/agent-project.md` for agent prompt layering (project slice).
+    fn read_agent_project(&self) -> Result<String, LoopError>;
 }

@@ -76,7 +76,9 @@ impl SqliteRepository {
 
         for &(version, sql) in MIGRATIONS {
             if version > current {
-                let tx = conn.transaction().map_err(|e| LoopError::Io(e.to_string()))?;
+                let tx = conn
+                    .transaction()
+                    .map_err(|e| LoopError::Io(e.to_string()))?;
                 tx.execute_batch(sql)
                     .map_err(|e| LoopError::Io(format!("migration {version} failed: {e}")))?;
                 tx.commit().map_err(|e| LoopError::Io(e.to_string()))?;
@@ -99,8 +101,7 @@ impl TaskRepository for SqliteRepository {
         })?;
 
         let already_existed = self.db_path.exists();
-        let mut conn =
-            Connection::open(&self.db_path).map_err(|e| LoopError::Io(e.to_string()))?;
+        let mut conn = Connection::open(&self.db_path).map_err(|e| LoopError::Io(e.to_string()))?;
 
         let applied = Self::apply_migrations(&mut conn)?;
 
@@ -139,7 +140,9 @@ impl TaskRepository for SqliteRepository {
         let now = Utc::now();
         let now_str = format_ts(now);
 
-        let tx = conn.transaction().map_err(|e| LoopError::Io(e.to_string()))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| LoopError::Io(e.to_string()))?;
 
         let max_seq: i64 = tx
             .query_row("SELECT COALESCE(MAX(seq), 0) FROM tasks", [], |row| {
@@ -209,7 +212,9 @@ impl TaskRepository for SqliteRepository {
         let mut conn = self.open()?;
         let now = Utc::now();
 
-        let tx = conn.transaction().map_err(|e| LoopError::Io(e.to_string()))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| LoopError::Io(e.to_string()))?;
 
         let old_status_str: String = tx
             .query_row(
@@ -268,6 +273,14 @@ impl TaskRepository for SqliteRepository {
         let plan_path = self.loop_dir.join("plan.md");
         std::fs::read_to_string(&plan_path).map_err(|e| LoopError::Io(e.to_string()))
     }
+
+    fn read_agent_project(&self) -> Result<String, LoopError> {
+        if !self.db_path.exists() {
+            return Err(LoopError::NotInitialized);
+        }
+        let path = self.loop_dir.join("agent-project.md");
+        std::fs::read_to_string(&path).map_err(|e| LoopError::Io(e.to_string()))
+    }
 }
 
 // --- Helpers ---
@@ -291,7 +304,11 @@ fn parse_depends_on(json: &str) -> Vec<TaskId> {
         .split(',')
         .filter_map(|s| {
             let s = s.trim().trim_matches('"');
-            if s.is_empty() { None } else { TaskId::parse(s).ok() }
+            if s.is_empty() {
+                None
+            } else {
+                TaskId::parse(s).ok()
+            }
         })
         .collect()
 }
@@ -325,8 +342,8 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     let model: Option<String> = row.get("model")?;
     let commit_sha: Option<String> = row.get("commit_sha")?;
 
-    let id = TaskId::parse(&id_str)
-        .map_err(|e| rusqlite::Error::InvalidColumnName(e.to_string()))?;
+    let id =
+        TaskId::parse(&id_str).map_err(|e| rusqlite::Error::InvalidColumnName(e.to_string()))?;
     let status = TaskStatus::parse(&status_str)
         .map_err(|e| rusqlite::Error::InvalidColumnName(e.to_string()))?;
     let depends_on = parse_depends_on(&depends_on_json);
@@ -373,9 +390,7 @@ mod tests {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let pid = std::process::id();
-        let root = std::env::temp_dir().join(format!(
-            "loop_sqlite_test_{pid}_{ns}_{n}"
-        ));
+        let root = std::env::temp_dir().join(format!("loop_sqlite_test_{pid}_{ns}_{n}"));
         std::fs::create_dir_all(&root).unwrap();
         let repo = SqliteRepository::new(&root);
         (repo, root)
@@ -412,8 +427,14 @@ mod tests {
         std::fs::write(&plan_path, "# My custom plan\n").unwrap();
         // Re-initializing from a fresh repo object on the same dir should give AlreadyInitialized
         let repo2 = SqliteRepository::new(&root);
-        assert!(matches!(repo2.initialize(), Err(LoopError::AlreadyInitialized)));
-        assert_eq!(std::fs::read_to_string(&plan_path).unwrap(), "# My custom plan\n");
+        assert!(matches!(
+            repo2.initialize(),
+            Err(LoopError::AlreadyInitialized)
+        ));
+        assert_eq!(
+            std::fs::read_to_string(&plan_path).unwrap(),
+            "# My custom plan\n"
+        );
     }
 
     #[test]
@@ -480,13 +501,19 @@ mod tests {
     #[test]
     fn get_task_not_found() {
         let (repo, _root) = init_repo();
-        assert!(matches!(repo.get_task("999"), Err(LoopError::TaskNotFound(_))));
+        assert!(matches!(
+            repo.get_task("999"),
+            Err(LoopError::TaskNotFound(_))
+        ));
     }
 
     #[test]
     fn get_task_invalid_id_format() {
         let (repo, _root) = init_repo();
-        assert!(matches!(repo.get_task("abc"), Err(LoopError::TaskNotFound(_))));
+        assert!(matches!(
+            repo.get_task("abc"),
+            Err(LoopError::TaskNotFound(_))
+        ));
     }
 
     #[test]
@@ -559,7 +586,10 @@ mod tests {
     fn update_task_not_found_fails() {
         let (repo, _root) = init_repo();
         let task = Task::new(99, "ghost".to_owned(), Utc::now());
-        assert!(matches!(repo.update_task(task), Err(LoopError::TaskNotFound(_))));
+        assert!(matches!(
+            repo.update_task(task),
+            Err(LoopError::TaskNotFound(_))
+        ));
     }
 
     #[test]
@@ -570,6 +600,16 @@ mod tests {
         let content = repo.read_plan().unwrap();
         assert!(content.contains("My Plan"));
         assert!(content.contains("Do great things."));
+    }
+
+    #[test]
+    fn read_agent_project_returns_content() {
+        let (repo, root) = init_repo();
+        let path = root.join(".loop").join("agent-project.md");
+        std::fs::write(&path, "# Project-only\nCTX\n").unwrap();
+        let content = repo.read_agent_project().unwrap();
+        assert!(content.contains("Project-only"));
+        assert!(content.contains("CTX"));
     }
 
     #[test]
@@ -609,7 +649,10 @@ mod tests {
             infer_event_type(TaskStatus::Failed, TaskStatus::Pending),
             Some(EventType::Reset)
         );
-        assert_eq!(infer_event_type(TaskStatus::Pending, TaskStatus::Complete), None);
+        assert_eq!(
+            infer_event_type(TaskStatus::Pending, TaskStatus::Complete),
+            None
+        );
         assert_eq!(
             infer_event_type(TaskStatus::Running, TaskStatus::Running),
             None
@@ -668,6 +711,9 @@ mod tests {
     fn get_task_missing_digit_id_is_task_not_found() {
         let (repo, _root) = init_repo();
         repo.add_task("exists").unwrap();
-        assert!(matches!(repo.get_task("002"), Err(LoopError::TaskNotFound(_))));
+        assert!(matches!(
+            repo.get_task("002"),
+            Err(LoopError::TaskNotFound(_))
+        ));
     }
 }
