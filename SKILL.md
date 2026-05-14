@@ -1,6 +1,6 @@
-# Skill: Planner-to-Loop Execution
+# Skill: Planner-to-bp execution
 
-Use this when you want one agent to plan and task work, and loop workers to execute each task in isolated sessions.
+Use this when you want one agent to plan and task work, and executor agents to run each task in isolated sessions.
 
 ## Always include this context for agents
 
@@ -8,10 +8,10 @@ Use this when you want one agent to plan and task work, and loop workers to exec
 Project context:
 - Read README.md for workflow overview.
 - Read loop-plan.md for design constraints.
-- Use loop commands (not raw .loop file browsing) for plan/task reads:
-  - ./loop read plan
-  - ./loop read current
-  - ./loop read <task-id>
+- Use `bp` commands (not raw .loop file browsing) for plan/task reads:
+  - `bp read plan`
+  - `bp read current`
+  - `bp read <task-id>`
 ```
 
 ## Planning agent responsibilities
@@ -27,26 +27,26 @@ Project context:
 ## Executor agent responsibilities
 
 1. Read task context:
-   - `./loop read current`
-   - `./loop read plan`
+   - `bp read current`
+   - `bp read plan`
 2. Implement only the current task scope.
 3. Add useful completion notes to the task file.
 4. Mark done with:
 
 ```bash
-./loop complete
+bp complete
 ```
 
-Do not commit manually; the loop orchestrator commits after each successful task.
+Do not commit manually during agent work unless the task says otherwise; the Rust **`bp`** PoC does not auto-commit after each task (see `README.md`).
 
 ## Human/operator commands
 
 ```bash
 # start or continue queued execution
-./loop run
+bp run
 
 # inspect queue
-./loop status
+bp status
 ```
 
 ## Recommended handoff template

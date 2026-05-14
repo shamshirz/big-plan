@@ -1,1 +1,0 @@
-/Users/aaronvotre/Git/big-plan/loop-rs/target/debug/loop: /Users/aaronvotre/Git/big-plan/loop-rs/src/cli.rs /Users/aaronvotre/Git/big-plan/loop-rs/src/commands.rs /Users/aaronvotre/Git/big-plan/loop-rs/src/domain.rs /Users/aaronvotre/Git/big-plan/loop-rs/src/main.rs /Users/aaronvotre/Git/big-plan/loop-rs/src/repository.rs /Users/aaronvotre/Git/big-plan/loop-rs/src/sqlite_repo.rs

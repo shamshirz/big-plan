@@ -1,2 +1,9 @@
 __pycache__/
 *.pyc
+
+# Rust build artifacts
+target/
+bp-rs/target/
+
+# Runtime state (project-local, not source of truth)
+.loop/

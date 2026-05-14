@@ -2,7 +2,7 @@
 
 ## Repository Intent
 
-This repository defines and evolves `loop`, a task-loop orchestration CLI. The active initiative is a Rust + SQLite PoC release with strong project-local isolation and an explicit public CLI API.
+This repository defines **big-plan**: a task-orchestration CLI invoked as **`bp`**, backed by Rust + SQLite with project-local isolation. The supported implementation lives in **`bp-rs/`** (see `README.md`).
 
 ## Agent Working Norms
 
@@ -13,27 +13,27 @@ This repository defines and evolves `loop`, a task-loop orchestration CLI. The a
 
 ## PoC Product Requirements
 
-- `cargo install` friendly executable: Rust crate **`loop-cli`** produces binary **`loop`** (`cargo install --path loop-rs` from this repo, or `cargo install loop-cli` once published; see `README.md`).
+- `cargo install` friendly executable: Rust crate **`big-plan`** produces binary **`bp`** (`cargo install --path bp-rs` from this repo, or `cargo install big-plan` once published; see `README.md`).
 - Project-local hidden state in the cwd where CLI is invoked.
 - SQLite-backed task/event persistence within that hidden directory.
 - Sequential task execution with clear status and completion metadata.
 
 ## Public CLI Surface (PoC release)
 
-These commands are the supported user-facing API of the Rust PoC; keep outputs and errors aligned with `.loop/cli-contract.md`.
+These commands are the supported user-facing API of the Rust PoC; keep outputs and errors aligned with `.loop/cli-contract.md` (update that doc to say `bp` when migrating off Python).
 
-- `loop init`
-- `loop add "<title>"`
-- `loop status`
-- `loop show <task-id>`
-- `loop read plan|current|<task-id>`
-- `loop run`
-- `loop complete [--notes "..."]`
-- `loop reset <task-id>`
+- `bp init`
+- `bp add "<title>"`
+- `bp status`
+- `bp show <task-id>`
+- `bp read plan|current|<task-id>`
+- `bp run`
+- `bp complete [--notes "..."]`
+- `bp reset <task-id>`
 
 ## Prompt Layering Contract
 
-Each loop-run task agent should receive:
+Each `bp run` task agent should receive:
 1. universal guidance
 2. project-specific context
 3. task-specific context

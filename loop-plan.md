@@ -1,4 +1,6 @@
-# `loop` — Minimal Proof of Concept
+> **Shipped CLI:** Use **`bp`** (Rust + SQLite). This file is the original markdown-on-disk PoC spec; wherever it says **`loop`** as a command, invoke **`bp`** instead (see root **`README.md`**).
+
+# Historical spec: markdown-first task orchestration
 
 ## What we're building
 
@@ -70,7 +72,7 @@ commit_sha: null
 ---
 
 ## Completion notes
-[Filled in by the executing agent before it runs `loop complete`.
+[Filled in by the executing agent before it runs `bp complete`.
 Should be detailed enough that downstream tasks can rely on it without
 re-deriving anything. If the agent had to make a non-obvious decision,
 record it here.]
@@ -86,14 +88,14 @@ Four commands. Three more are nice-to-haves.
 
 ### Required
 
-#### `loop init`
+#### `bp init`
 
 - Creates `.loop/` if not present
 - Writes a `plan.md` template
 - Creates a git branch `loop/<UTC-timestamp>` from current HEAD
 - Idempotent: if `.loop/` exists, error out (don't clobber)
 
-#### `loop add "<title>"`
+#### `bp add "<title>"`
 
 - Allocates the next ID (zero-padded, 3 digits)
 - Slugifies the title for the filename: `NNN-<slug>.md`
@@ -101,27 +103,27 @@ Four commands. Three more are nice-to-haves.
 - Prints the path so the planning agent can immediately edit it
 - The planning agent fills in Description / Context / Acceptance criteria via its normal file-edit tools
 
-#### `loop run`
+#### `bp run`
 
 The outer loop. See pseudocode below.
 
-#### `loop complete [--notes "..."]`
+#### `bp complete [--notes "..."]`
 
 - Run from inside an executing agent's session
-- Reads `LOOP_TASK_ID` from env (set by `loop run` before spawning)
+- Reads `LOOP_TASK_ID` from env (set by `bp run` before spawning) — **Python only**; **`bp`** binds the running task from SQLite.
 - Sets that task's `status: complete`, `completed_at: now`
 - If `--notes` given, appends to the Completion notes section (agent can also just edit the file directly — both work)
 - Exits 0; agent's session should exit immediately after
 
 ### Nice-to-have (add only if trivial)
 
-- `loop status` — prints all tasks with status, for humans
-- `loop show <id>` — prints a task file (`cat`, basically)
-- `loop reset <id>` — sets a task back to pending; for re-running
+- `bp status` — prints all tasks with status, for humans
+- `bp show <id>` — prints a task file (`cat`, basically)
+- `bp reset <id>` — sets a task back to pending; for re-running
 
 ---
 
-## The outer loop (`loop run`)
+## The outer loop (`bp run`)
 
 Pseudocode:
 
@@ -178,7 +180,7 @@ while True:
 
 Key behaviors:
 
-- The agent is responsible for setting `status: complete` (via `loop complete` or by editing frontmatter directly). If it exits without doing so, that task is marked `failed` and the loop **stops** — don't try to recover, just bail and let the human inspect.
+- The agent is responsible for setting `status: complete` (via `bp complete` or by editing frontmatter directly). If it exits without doing so, that task is marked `failed` and the loop **stops** — don't try to recover, just bail and let the human inspect.
 - Failure halts the loop. v1 doesn't retry.
 - Don't capture-and-replay `claude` output; stream it to the terminal so the human can watch.
 
@@ -197,7 +199,7 @@ You are working on a single task in a multi-task plan.
 5. Before finishing, edit the "Completion notes" section of your task file.
    Be specific: what files you touched, what decisions you made, what
    the next task can rely on.
-6. When done, run `loop complete`. Then exit.
+6. When done, run `bp complete`. Then exit.
 
 You do not need to commit. The orchestrator commits after you exit.
 You do not need to manage branches.
@@ -210,7 +212,7 @@ This prompt is static. Task-specific content reaches the agent via the task file
 
 ## Git workflow
 
-- `loop init` creates `loop/<timestamp>` branch
+- `bp init` creates `loop/<timestamp>` branch
 - After each successful task, orchestrator commits everything in the working tree on that branch
 - Commit message format: `task {id}: {title}` with the first ~500 chars of completion notes as the body
 - Commit SHA written back into the task frontmatter (`commit_sha:`)
@@ -222,21 +224,19 @@ The branch name plus task IDs makes correlating "which agent session produced wh
 
 ## Implementation guidance
 
-**Language:** Python 3, stdlib only. No `pyyaml` — write a minimal frontmatter parser (it's ~30 lines; just split on `---` and parse simple `key: value` lines). No external deps means anyone can run this immediately.
+**Language:** Rust (crate **`big-plan`**, binary **`bp`**) in `bp-rs/`, SQLite via `rusqlite`. The historical Python stdlib-only prototype has been removed from this repo.
 
 **Layout:**
 
 ```
-loop                        # entry script (chmod +x, on PATH)
-loop_lib/
-  __init__.py
-  cli.py                    # argparse dispatch
-  storage.py                # task file read/write, frontmatter parse
-  runner.py                 # the outer loop
-  git.py                    # thin wrapper over git subprocess
+bp-rs/
+  Cargo.toml
+  src/
+    main.rs, cli.rs, commands.rs, domain.rs, repository.rs, sqlite_repo.rs,
+    orchestrator.rs, render.rs, …
 ```
 
-Aim for ~300-400 lines total. If you're going past 600, you're gold-plating.
+Earlier design notes in this document that reference Python symlinks or `loop_lib/` describe the **retired** implementation; **`bp`** behavior is authoritative.
 
 **Stream-json parsing:** the last JSON object emitted by `claude -p --output-format stream-json` has `type: "result"` and includes `usage.input_tokens`, `usage.output_tokens`, `total_cost_usd`, `duration_ms`. Capture that line, ignore the rest for stats purposes (still relay everything to the terminal).
 
@@ -249,11 +249,11 @@ Aim for ~300-400 lines total. If you're going past 600, you're gold-plating.
 Implement in this order. Don't move on until each step works end-to-end.
 
 1. **Scaffold + `init` + `add`.** Just file creation. Verify by hand that `.loop/` and task files look right.
-2. `**loop run` skeleton.** Find next pending task, mark running, mark complete, advance — but instead of spawning Claude, just `print("would run task", id)` and immediately set status=complete. Confirm the loop terminates on an empty queue.
-3. **Wire in `claude -p`.** Spawn it with the prompt, stream output, wait. No JSON parsing yet. Verify a real task runs end-to-end with the agent calling `loop complete` itself.
+2. **`bp run` skeleton.** Find next pending task, mark running, mark complete, advance — but instead of spawning Claude, just `print("would run task", id)` and immediately set status=complete. Confirm the loop terminates on an empty queue.
+3. **Wire in `claude -p`.** Spawn it with the prompt, stream output, wait. No JSON parsing yet. Verify a real task runs end-to-end with the agent calling `bp complete` itself.
 4. **Token/time capture.** Parse `--output-format stream-json`, extract usage from the final `result` event, write into frontmatter.
 5. **Git integration.** Branch creation in `init`, auto-commit after each task, SHA back into frontmatter.
-6. **Polish.** `loop status`, error messages, the `log.jsonl` append.
+6. **Polish.** `bp status`, error messages, the `log.jsonl` append.
 
 Stop after step 6. Don't add features not on this list.
 
@@ -275,10 +275,10 @@ Stop after step 6. Don't add features not on this list.
 ## Acceptance test (PoC)
 
 1. `cd` into a clean git repo.
-2. `loop init`. See `.loop/` and a new branch.
+2. `bp init`. See `.loop/` and a new branch.
 3. Manually write a `plan.md` with a 3-task plan ("create a hello.py, add a test, run the test").
-4. `loop add "create hello.py"` × 3, edit each task's Description.
-5. `loop run`.
+4. `bp add "create hello.py"` × 3, edit each task's Description.
+5. `bp run`.
 6. Watch three Claude sessions execute in series. Each commits one (or more) commit on the branch.
 7. After it exits, every task file has `status: complete`, populated `completion_notes`, `input_tokens`, `output_tokens`, `duration_seconds`, `commit_sha`.
 8. `git log` shows three commits with task IDs in messages.

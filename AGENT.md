@@ -2,7 +2,7 @@
 
 ## Why This Exists
 
-`loop` is designed to decompose project work into narrow, high-signal tasks that can be executed by agents with bounded context.
+**big-plan** (`bp`) decomposes project work into narrow, high-signal tasks that can be executed by agents with bounded context.
 
 ## Task Decomposition Heuristics
 
@@ -29,13 +29,15 @@ Examples of good separation:
 - Document completion notes with concrete changes and validation.
 - Avoid unrelated refactors.
 
-## Released loop workflow (Rust PoC)
+## Released `bp` workflow (Rust)
 
-When this repository (or an installed `loop` binary from `loop-cli`) drives work:
+When this repository (or an installed **`bp`** binary from crate **`big-plan`**) drives work:
 
-1. **Project bootstrap:** humans run `loop init` once per repo; context lives under `.loop/`.
-2. **Task intake:** `loop add "<title>"` appends a pending task; `loop status` / `loop show <id>` inspect the queue.
-3. **Agent session:** the runner ensures exactly one task is **`running`** (today this may be an external orchestrator while `loop run` agent spawning is still landing). Agents pull canonical text with `loop read plan`, `loop read current`, or `loop read <id>`.
-4. **Wrap-up:** agents run `loop complete --notes "..."` to persist notes and mark **complete**; use `loop reset <id>` to return a task to **pending** if work must be redone.
+1. **Project bootstrap:** run `bp init` once per repo; SQLite and templates live under `.loop/`.
+2. **Task intake:** `bp add "<title>"` creates a pending task; `bp status` / `bp show <id>` inspect the queue.
+3. **Agent session:** `bp run` marks the next pending task **running** and spawns your agent hook (`BP_RUN_AGENT_SCRIPT`, etc.). Agents read canonical text with `bp read plan`, `bp read current`, or `bp read <id>`.
+4. **Wrap-up:** agents run `bp complete --notes "..."` to persist notes and mark **complete**; `bp reset <id>` returns a task to **pending** if work must be redone.
+
+For CI and deterministic integration tests, `BP_RUN_SKIP_AGENT=1` completes tasks without spawning an agent.
 
 Behavior details and error messages are specified in `.loop/cli-contract.md`; user-facing overview is in `README.md`.
