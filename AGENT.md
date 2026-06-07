@@ -35,8 +35,8 @@ When this repository (or an installed **`bp`** binary from crate **`big-plan`**)
 
 1. **Project bootstrap:** run `bp init` once per repo; SQLite and templates live under `.loop/`.
 2. **Task intake:** `bp add "<title>"` creates a pending task; `bp status` / `bp show <id>` inspect the queue.
-3. **Agent session:** `bp run` marks the next pending task **running** and spawns your agent hook (`BP_RUN_AGENT_SCRIPT`, etc.). Agents read canonical text with `bp read plan`, `bp read current`, or `bp read <id>`.
-4. **Wrap-up:** agents run `bp complete --notes "..."` to persist notes and mark **complete**; `bp reset <id>` returns a task to **pending** if work must be redone.
+3. **Agent session:** `bp run [--model <id>]` marks the next pending task **running** and spawns your agent hook (`BP_RUN_AGENT_SCRIPT`, etc.; default Cursor backend accepts `--model`, e.g. `composer-2.5`). Agents read canonical text with `bp read plan`, `bp read current`, or `bp read <id>`.
+4. **Wrap-up:** agents run `bp complete --notes "..."` to persist notes and mark **complete**; `bp reset <id>` returns a task to **pending** if work must be redone. `bp status` shows active runs (pid + task) or warns when a task is stale **running** after interrupt/sleep.
 
 For CI and deterministic integration tests, `BP_RUN_SKIP_AGENT=1` completes tasks without spawning an agent.
 

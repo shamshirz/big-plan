@@ -42,10 +42,10 @@ Do not commit manually during agent work unless the task says otherwise; the Rus
 ## Human/operator commands
 
 ```bash
-# start or continue queued execution
-bp run
+# start or continue queued execution (pin Cursor model when needed)
+bp run --model composer-2.5
 
-# inspect queue
+# inspect queue; shows active bp run or stale-running warning
 bp status
 ```
 

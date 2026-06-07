@@ -8,8 +8,11 @@ pub enum Command {
     Status,
     Show { id: String },
     Read { target: ReadTarget },
-    Run,
-    Complete { notes: Option<String> },
+    Run { agent_model: Option<String> },
+    Complete {
+        notes: Option<String>,
+        if_running: bool,
+    },
     Reset { id: String },
 }
 
@@ -28,6 +31,7 @@ pub enum ParseError {
     MissingId { cmd: &'static str },
     MissingReadTarget,
     MissingNotesValue,
+    MissingFlagValue { flag: String },
 }
 
 pub fn parse() -> Result<Command, ParseError> {
@@ -43,7 +47,7 @@ pub fn parse_from(args: &[String]) -> Result<Command, ParseError> {
         Some("status") => Ok(Command::Status),
         Some("show") => parse_show(&args[1..]),
         Some("read") => parse_read(&args[1..]),
-        Some("run") => Ok(Command::Run),
+        Some("run") => parse_run(&args[1..]),
         Some("complete") => parse_complete(&args[1..]),
         Some("reset") => parse_reset(&args[1..]),
         Some(unknown) => Err(ParseError::UnknownCommand(unknown.to_owned())),
@@ -74,9 +78,15 @@ fn parse_read(args: &[String]) -> Result<Command, ParseError> {
     }
 }
 
+fn parse_run(args: &[String]) -> Result<Command, ParseError> {
+    let agent_model = extract_flag_value(args, "--model")?;
+    Ok(Command::Run { agent_model })
+}
+
 fn parse_complete(args: &[String]) -> Result<Command, ParseError> {
     let notes = extract_notes_flag(args)?;
-    Ok(Command::Complete { notes })
+    let if_running = args.iter().any(|a| a == "--if-running");
+    Ok(Command::Complete { notes, if_running })
 }
 
 fn parse_reset(args: &[String]) -> Result<Command, ParseError> {
@@ -92,6 +102,22 @@ fn extract_notes_flag(args: &[String]) -> Result<Option<String>, ParseError> {
         if args[i] == "--notes" {
             return match args.get(i + 1) {
                 None => Err(ParseError::MissingNotesValue),
+                Some(v) => Ok(Some(v.clone())),
+            };
+        }
+        i += 1;
+    }
+    Ok(None)
+}
+
+fn extract_flag_value(args: &[String], flag: &str) -> Result<Option<String>, ParseError> {
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == flag {
+            return match args.get(i + 1) {
+                None => Err(ParseError::MissingFlagValue {
+                    flag: flag.to_owned(),
+                }),
                 Some(v) => Ok(Some(v.clone())),
             };
         }
@@ -200,18 +226,71 @@ mod tests {
 
     #[test]
     fn parse_run() {
-        assert_eq!(parse_from(&args("run")), Ok(Command::Run));
+        assert_eq!(
+            parse_from(&args("run")),
+            Ok(Command::Run { agent_model: None })
+        );
+    }
+
+    #[test]
+    fn parse_run_with_model() {
+        let a = [
+            "run".to_owned(),
+            "--model".to_owned(),
+            "composer-2.5".to_owned(),
+        ];
+        assert_eq!(
+            parse_from(&a),
+            Ok(Command::Run {
+                agent_model: Some("composer-2.5".to_owned())
+            })
+        );
+    }
+
+    #[test]
+    fn parse_run_model_flag_missing_value() {
+        let a = ["run".to_owned(), "--model".to_owned()];
+        assert_eq!(
+            parse_from(&a),
+            Err(ParseError::MissingFlagValue {
+                flag: "--model".to_owned()
+            })
+        );
     }
 
     #[test]
     fn parse_complete_no_notes() {
-        assert_eq!(parse_from(&args("complete")), Ok(Command::Complete { notes: None }));
+        assert_eq!(
+            parse_from(&args("complete")),
+            Ok(Command::Complete {
+                notes: None,
+                if_running: false
+            })
+        );
     }
 
     #[test]
     fn parse_complete_with_notes() {
         let a = ["complete".to_owned(), "--notes".to_owned(), "done".to_owned()];
-        assert_eq!(parse_from(&a), Ok(Command::Complete { notes: Some("done".to_owned()) }));
+        assert_eq!(
+            parse_from(&a),
+            Ok(Command::Complete {
+                notes: Some("done".to_owned()),
+                if_running: false
+            })
+        );
+    }
+
+    #[test]
+    fn parse_complete_if_running() {
+        let a = ["complete".to_owned(), "--if-running".to_owned()];
+        assert_eq!(
+            parse_from(&a),
+            Ok(Command::Complete {
+                notes: None,
+                if_running: true
+            })
+        );
     }
 
     #[test]

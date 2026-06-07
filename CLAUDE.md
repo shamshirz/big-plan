@@ -27,8 +27,8 @@ These commands are the supported user-facing API of the Rust PoC; keep outputs a
 - `bp status`
 - `bp show <task-id>`
 - `bp read plan|current|<task-id>`
-- `bp run`
-- `bp complete [--notes "..."]`
+- `bp run [--model <cursor-model-id>]`
+- `bp complete [--notes "..."] [--if-running]`
 - `bp reset <task-id>`
 
 ## Prompt Layering Contract

@@ -3,10 +3,12 @@ use std::path::Path;
 use chrono::Utc;
 
 use crate::domain::{
-    current_running, transition_complete, transition_reset, CompletionData, DomainError,
+    current_running, transition_complete, transition_reset, CompletionData, DomainError, TaskStatus,
 };
+use crate::orchestrator::RunConfig;
 use crate::render::{render_task_detail, render_task_markdown};
 use crate::repository::{LoopError, TaskRepository};
+use crate::run_lock;
 
 pub fn help() -> i32 {
     println!(
@@ -21,8 +23,8 @@ pub fn help() -> i32 {
            status                List all tasks with ID, status, and title\n\
            show <id>             Print full task detail\n\
            read plan|current|<id>  Print planning or task text for agent use\n\
-           run                   Execute pending tasks sequentially via agent sessions\n\
-           complete [--notes \"\"] Mark the current task complete\n\
+           run [--model <id>]    Execute pending tasks sequentially via agent sessions\n\
+           complete [--notes \"\"] [--if-running] Mark the current task complete\n\
            reset <id>            Return a task to pending and clear metrics\n\
          \n\
          Run `bp <command> -h` for command-specific help."
@@ -69,6 +71,7 @@ pub fn add(repo: &dyn TaskRepository, title: &str) -> i32 {
 }
 
 pub fn status(repo: &dyn TaskRepository) -> i32 {
+    let project_root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     match repo.list_tasks() {
         Ok(tasks) if tasks.is_empty() => {
             println!("No tasks. Run `bp add \"<title>\"` to create one.");
@@ -77,12 +80,32 @@ pub fn status(repo: &dyn TaskRepository) -> i32 {
         Ok(tasks) => {
             println!("{:<5} {:<10} {}", "ID", "STATUS", "TITLE");
             for task in &tasks {
-                println!(
+                let mut line = format!(
                     "{:<5} {:<10} {}",
                     task.id,
                     task.status,
                     truncate(&task.title, 60)
                 );
+                if task.status == TaskStatus::Running {
+                    if let Some(started_at) = task.started_at {
+                        let elapsed = Utc::now().signed_duration_since(started_at);
+                        let mins = elapsed.num_minutes();
+                        if mins > 0 {
+                            line.push_str(&format!("  ({mins}m running)"));
+                        } else {
+                            line.push_str("  (<1m running)");
+                        }
+                    }
+                }
+                println!("{line}");
+            }
+            let running_task_id = tasks
+                .iter()
+                .find(|t| t.status == TaskStatus::Running)
+                .map(|t| t.id.as_str());
+            if let Some(activity) = run_lock::format_run_activity(&project_root, running_task_id) {
+                println!();
+                println!("{activity}");
             }
             0
         }
@@ -188,11 +211,15 @@ pub fn read_task(repo: &dyn TaskRepository, id: &str) -> i32 {
     }
 }
 
-pub fn run(repo: &dyn TaskRepository, project_root: &Path) -> i32 {
-    crate::orchestrator::execute_run(repo, project_root)
+pub fn run(repo: &dyn TaskRepository, project_root: &Path, agent_model: Option<&str>) -> i32 {
+    let model = agent_model
+        .map(str::to_owned)
+        .or_else(|| std::env::var("BP_AGENT_MODEL").ok().filter(|s| !s.trim().is_empty()));
+    let config = RunConfig { agent_model: model };
+    crate::orchestrator::execute_run(repo, project_root, &config)
 }
 
-pub fn complete(repo: &dyn TaskRepository, notes: Option<&str>) -> i32 {
+pub fn complete(repo: &dyn TaskRepository, notes: Option<&str>, if_running: bool) -> i32 {
     let tasks = match repo.list_tasks() {
         Ok(t) => t,
         Err(LoopError::NotInitialized) => {
@@ -208,6 +235,9 @@ pub fn complete(repo: &dyn TaskRepository, notes: Option<&str>) -> i32 {
     let running = match current_running(&tasks) {
         Ok(t) => t.clone(),
         Err(DomainError::NoRunningTask) => {
+            if if_running {
+                return 0;
+            }
             eprintln!("error: no task is currently running");
             return 1;
         }

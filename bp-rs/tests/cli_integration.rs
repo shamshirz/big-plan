@@ -288,6 +288,30 @@ fn init_add_complete_reset_end_to_end() {
 }
 
 #[test]
+fn complete_if_running_is_silent_without_running_task() {
+    let tmp = TempDir::new().expect("tempdir");
+    init_project(tmp.path());
+    let out = run_in(tmp.path(), &["complete", "--if-running"]);
+    assert!(out.status.success());
+    let (_, stderr) = output_utf8(&out);
+    assert!(!stderr.contains("no task is currently running"));
+}
+
+#[test]
+fn status_warns_when_task_running_without_active_bp_run() {
+    let tmp = TempDir::new().expect("tempdir");
+    init_project(tmp.path());
+    assert!(run_in(tmp.path(), &["add", "stuck"]).status.success());
+    force_task_running(tmp.path(), "001");
+    let out = run_in(tmp.path(), &["status"]);
+    assert!(out.status.success());
+    let (stdout, _) = output_utf8(&out);
+    assert!(stdout.contains("running"));
+    assert!(stdout.contains("no active bp run"));
+    assert!(stdout.contains("bp reset 001"));
+}
+
+#[test]
 fn parse_error_ux_add_without_title() {
     let tmp = TempDir::new().expect("tempdir");
     let out = run_in(tmp.path(), &["add"]);

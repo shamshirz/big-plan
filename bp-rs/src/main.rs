@@ -4,6 +4,7 @@ pub mod domain;
 pub mod orchestrator;
 pub mod render;
 pub mod repository;
+pub mod run_lock;
 pub mod sqlite_repo;
 
 use cli::{Command, ParseError, ReadTarget};
@@ -39,7 +40,14 @@ fn main() {
         }
         Err(ParseError::MissingNotesValue) => {
             eprintln!("error: --notes requires a value");
-            eprintln!("Usage: bp complete [--notes \"<text>\"]");
+            eprintln!("Usage: bp complete [--notes \"<text>\"] [--if-running]");
+            std::process::exit(1);
+        }
+        Err(ParseError::MissingFlagValue { flag }) => {
+            eprintln!("error: {flag} requires a value");
+            if flag == "--model" {
+                eprintln!("Usage: bp run [--model <cursor-model-id>]");
+            }
             std::process::exit(1);
         }
     };
@@ -66,8 +74,10 @@ fn dispatch(cmd: Command, repo: &dyn TaskRepository, cwd: &std::path::Path) -> i
         Command::Read {
             target: ReadTarget::Task(id),
         } => commands::read_task(repo, &id),
-        Command::Run => commands::run(repo, cwd),
-        Command::Complete { notes } => commands::complete(repo, notes.as_deref()),
+        Command::Run { agent_model } => commands::run(repo, cwd, agent_model.as_deref()),
+        Command::Complete { notes, if_running } => {
+            commands::complete(repo, notes.as_deref(), if_running)
+        }
         Command::Reset { id } => commands::reset(repo, &id),
     }
 }

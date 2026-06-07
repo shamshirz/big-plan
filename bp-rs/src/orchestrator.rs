@@ -12,6 +12,23 @@ use crate::domain::{
 };
 use crate::render::render_task_markdown;
 use crate::repository::{LoopError, TaskRepository};
+use crate::run_lock;
+
+/// Options for `bp run` (CLI flags with env fallbacks applied in `commands::run`).
+#[derive(Debug, Clone, Default)]
+pub struct RunConfig {
+    pub agent_model: Option<String>,
+}
+
+struct RunLockGuard<'a> {
+    project_root: &'a Path,
+}
+
+impl Drop for RunLockGuard<'_> {
+    fn drop(&mut self) {
+        run_lock::clear_run_lock(self.project_root);
+    }
+}
 
 /// Universal prompt slice (stable, installable without repo-local `AGENT.md`).
 const DEFAULT_UNIVERSAL_GUIDANCE: &str = "# Universal guidance\n\n\
@@ -22,7 +39,7 @@ const DEFAULT_UNIVERSAL_GUIDANCE: &str = "# Universal guidance\n\n\
 \n";
 
 /// Runs pending tasks until none remain, or until an agent failure / stall.
-pub fn execute_run(repo: &dyn TaskRepository, project_root: &Path) -> i32 {
+pub fn execute_run(repo: &dyn TaskRepository, project_root: &Path, config: &RunConfig) -> i32 {
     loop {
         let tasks = match repo.list_tasks() {
             Ok(t) => t,
@@ -83,6 +100,11 @@ pub fn execute_run(repo: &dyn TaskRepository, project_root: &Path) -> i32 {
         }
 
         println!("Running task {}: {}", task_id, task_title);
+        if let Err(e) = run_lock::write_run_lock(project_root, &task_id) {
+            eprintln!("error: could not write run lock — {e}");
+            return 2;
+        }
+        let _run_guard = RunLockGuard { project_root };
 
         if run_skip_agent_enabled() {
             let running_task = match load_running_task(repo, &task_id) {
@@ -113,7 +135,7 @@ pub fn execute_run(repo: &dyn TaskRepository, project_root: &Path) -> i32 {
             continue;
         }
 
-        let status = match invoke_agent(&prompt, project_root) {
+        let status = match invoke_agent(&prompt, project_root, config) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("error: could not run agent subprocess — {e}");
@@ -217,12 +239,13 @@ fn assemble_layered_prompt(repo: &dyn TaskRepository, task: &Task) -> Result<Str
 pub fn invoke_agent(
     prompt: &str,
     project_root: &Path,
+    config: &RunConfig,
 ) -> std::io::Result<std::process::ExitStatus> {
     let bp_cmd = std::env::current_exe()
         .ok()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "bp".to_string());
-    let (shell, script) = agent_shell_and_script(&bp_cmd);
+    let (shell, script) = agent_shell_and_script(&bp_cmd, config);
 
     let mut child = Command::new(&shell)
         .current_dir(project_root)
@@ -240,7 +263,7 @@ pub fn invoke_agent(
     child.wait()
 }
 
-fn agent_shell_and_script(bp_cmd: &str) -> (String, String) {
+fn agent_shell_and_script(bp_cmd: &str, config: &RunConfig) -> (String, String) {
     let shell = std::env::var("BP_RUN_AGENT_SHELL")
         .or_else(|_| std::env::var("LOOP_RUN_AGENT_SHELL"))
         .unwrap_or_else(|_| "sh".to_string());
@@ -256,24 +279,27 @@ fn agent_shell_and_script(bp_cmd: &str) -> (String, String) {
                 .to_ascii_lowercase();
             match backend.as_str() {
                 "claude" => default_claude_script(bp_cmd),
-                _ => default_cursor_script(bp_cmd),
+                _ => default_cursor_script(bp_cmd, config.agent_model.as_deref()),
             }
         }
     };
     (shell, script)
 }
 
-fn default_cursor_script(bp_cmd: &str) -> String {
+fn default_cursor_script(bp_cmd: &str, agent_model: Option<&str>) -> String {
+    let model_flag = agent_model
+        .map(|m| format!(" --model \"{m}\""))
+        .unwrap_or_default();
     format!(
-        "prompt=\"$(cat)\"; cursor agent \"$prompt\" --print --force --trust --output-format text; \
-code=$?; if [ $code -eq 0 ]; then '{bp_cmd}' complete --notes \"completed via cursor backend\" || true; fi; exit $code"
+        "prompt=\"$(cat)\"; cursor agent \"$prompt\"{model_flag} --print --force --trust --output-format text; \
+code=$?; if [ $code -eq 0 ]; then '{bp_cmd}' complete --if-running --notes \"completed via cursor backend\" || true; fi; exit $code"
     )
 }
 
 fn default_claude_script(bp_cmd: &str) -> String {
     format!(
         "prompt=\"$(cat)\"; claude -p \"$prompt\" --verbose --output-format stream-json --dangerously-skip-permissions; \
-code=$?; if [ $code -eq 0 ]; then '{bp_cmd}' complete --notes \"completed via claude backend\" || true; fi; exit $code"
+code=$?; if [ $code -eq 0 ]; then '{bp_cmd}' complete --if-running --notes \"completed via claude backend\" || true; fi; exit $code"
     )
 }
 
@@ -380,5 +406,18 @@ mod tests {
     fn universal_guidance_mentions_bp_not_loop() {
         assert!(DEFAULT_UNIVERSAL_GUIDANCE.contains("bp complete"));
         assert!(DEFAULT_UNIVERSAL_GUIDANCE.contains("bp read"));
+    }
+
+    #[test]
+    fn default_cursor_script_includes_model_flag() {
+        let script = default_cursor_script("/usr/bin/bp", Some("composer-2.5"));
+        assert!(script.contains("--model \"composer-2.5\""));
+        assert!(script.contains("complete --if-running"));
+    }
+
+    #[test]
+    fn default_cursor_script_omits_model_when_unset() {
+        let script = default_cursor_script("/usr/bin/bp", None);
+        assert!(!script.contains("--model"));
     }
 }

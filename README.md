@@ -39,8 +39,8 @@ Help: `bp`, `bp -h`, and `bp --help` are equivalent.
 | `bp status` | List tasks (id, status, title) |
 | `bp show <id>` | Full task detail |
 | `bp read plan` / `current` / `<id>` | Markdown for agents |
-| `bp run` | Run pending tasks one-by-one (agent hook + layered prompt) |
-| `bp complete [--notes "..."]` | Mark the **running** task complete |
+| `bp run [--model <id>]` | Run pending tasks one-by-one (agent hook + layered prompt) |
+| `bp complete [--notes "..."] [--if-running]` | Mark the **running** task complete (`--if-running` no-ops silently) |
 | `bp reset <id>` | Put task back to `pending`; clear run metrics |
 
 ## Agent / `bp run`
@@ -56,6 +56,7 @@ Help: `bp`, `bp -h`, and `bp --help` are equivalent.
 |----------|---------|
 | **`BP_RUN_SKIP_AGENT=1`** | **CI / integration default:** do not spawn an agent; auto-complete each task with a synthetic note (no subprocess). |
 | **`BP_AGENT_BACKEND`** | Backend adapter when no explicit script is set: `cursor` (default) or `claude`. |
+| **`BP_AGENT_MODEL`** | Cursor model id for `bp run` when `--model` is not passed (e.g. `composer-2.5`). |
 | **`BP_RUN_AGENT_SHELL`** | Shell (default `sh`). `LOOP_RUN_AGENT_SHELL` still works. |
 | **`BP_RUN_AGENT_SCRIPT`** | Full override script passed to `shell -c` (advanced). `LOOP_RUN_AGENT_SCRIPT` still works. |
 | **`BP_COMPLETE_*`** | Optional metrics when completing (see `commands.rs`): `INPUT_TOKENS`, `OUTPUT_TOKENS`, `MODEL`, `COMMIT_SHA`. `LOOP_COMPLETE_*` still accepted. |
@@ -66,8 +67,10 @@ Authenticate once (`cursor agent login`). Then:
 
 ```bash
 export BP_AGENT_BACKEND=cursor   # default, can omit
-bp run
+bp run --model composer-2.5      # pin model (or: export BP_AGENT_MODEL=composer-2.5)
 ```
+
+`bp status` reports an **active** `bp run` (pid + task) while a queue is executing, or warns when a task is **stale running** after sleep/crash — run `bp reset <id>` and `bp run` again.
 
 ### Example: Claude Code
 
