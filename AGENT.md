@@ -2,11 +2,23 @@
 
 This file is for agents working **in this repository** to evolve the `bp` tool itself. For using `bp` in other projects, see **`SKILL.md`** (also copied to `.loop/SKILL.md` on `bp init`).
 
+`CLAUDE.md` is a symlink to this file (Cursor/Claude Code reads that path by convention).
+
 ## Repository intent
 
 - Rust crate in `bp-rs/` produces binary **`bp`** (crate name `big-plan`).
 - Tasks and goals live in SQLite under `.loop/` — no per-task markdown files.
-- Sequential execution with layered prompts: universal → `agent-project.md` → task.
+- Sequential execution with clear status and completion metadata.
+
+## Prompt layering
+
+Each `bp run` task agent receives, in order:
+
+1. Universal guidance (abbreviated `bp` usage + `.loop/SKILL.md` path)
+2. Project-specific context (`.loop/agent-project.md`)
+3. Task-specific context (SQLite task rendered as markdown)
+
+Planning tasks (`bp run plan.md`) use plan-decomposition guidance instead of normal task markdown.
 
 ## How to work here
 
