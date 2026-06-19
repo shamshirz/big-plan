@@ -2,6 +2,8 @@
 
 **big-plan** is a project-local CLI (**`bp`**) for orchestrating task-focused agent sessions. State lives in SQLite under `.loop/` (runtime only — gitignored, like [Simon Willison's `llm` CLI](https://github.com/simonw/llm) history DB).
 
+> **Disclaimer:** The Rust in `bp-rs/` is **entirely agent-written** and **not human-reviewed**. Treat it as experimental — read the code, run tests, and use at your own risk.
+
 - **Crate name (Cargo):** `big-plan`
 - **Binary name:** `bp`
 
