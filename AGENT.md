@@ -1,43 +1,47 @@
-# AGENT.md
+# AGENT.md — modifying the big-plan repo
 
-## Why This Exists
+This file is for agents working **in this repository** to evolve the `bp` tool itself. For using `bp` in other projects, see **`SKILL.md`** (also copied to `.loop/SKILL.md` on `bp init`).
 
-**big-plan** (`bp`) decomposes project work into narrow, high-signal tasks that can be executed by agents with bounded context.
+## Repository intent
 
-## Task Decomposition Heuristics
+- Rust crate in `bp-rs/` produces binary **`bp`** (crate name `big-plan`).
+- Tasks and goals live in SQLite under `.loop/` — no per-task markdown files.
+- Sequential execution with layered prompts: universal → `agent-project.md` → task.
+
+## How to work here
+
+1. Run `bp init` once in this repo root (if not already).
+2. Start a goal: `bp run simplification-plan.md` or `bp goal new` + `bp add`.
+3. Execute: `bp run [--model <id>]` (Cursor default).
+4. Inspect: `bp status`, `bp show <id>`, `bp summary`.
+
+For deterministic tests without spawning an agent: `BP_RUN_SKIP_AGENT=1 bp run`.
+
+## Task decomposition (when editing this codebase)
 
 - One major concern per task.
-- Prefer serializable units that can be reviewed independently.
-- Split design-heavy and implementation-heavy work.
-- Separate data model design from DB integration code.
-- Separate persistence integration from CLI UX shaping.
+- Split domain logic from SQLite adapter from CLI from orchestrator.
+- Keep functional core pure; shell/agent I/O at the edges.
+- Preserve user-visible CLI behavior unless the task explicitly changes it.
 
-## Context Is A Feature
+## Completion standard
 
-Rebuilding context per task is beneficial when tasks are compartmentalized.
-Use this to reduce prompt bloat and improve focus.
+- Minimal, focused diffs.
+- `cargo test --manifest-path bp-rs/Cargo.toml` passes.
+- Document non-obvious behavior in README or code comments sparingly.
+- Mark done: `bp complete --notes "..."` with what changed and how you verified.
 
-Examples of good separation:
-- CLI public API contract task
-- SQLite schema and migrations task
-- Rust domain model/state transition task
-- Agent orchestration shell adapter task
+## Public CLI surface
 
-## Completion Standard Per Task
+```
+bp init
+bp goal new | list
+bp run [plan.md] [--model <id>] [--backend cursor|claude]
+bp add "<title>"
+bp status | show <id> | read plan|current|<id>
+bp complete [--notes "..."] [--if-running]
+bp reset <id>
+bp summary [--json]
+```
 
-- Update task acceptance criteria.
-- Document completion notes with concrete changes and validation.
-- Avoid unrelated refactors.
-
-## Released `bp` workflow (Rust)
-
-When this repository (or an installed **`bp`** binary from crate **`big-plan`**) drives work:
-
-1. **Project bootstrap:** run `bp init` once per repo; SQLite and templates live under `.loop/`.
-2. **Task intake:** `bp add "<title>"` creates a pending task; `bp status` / `bp show <id>` inspect the queue.
-3. **Agent session:** `bp run [--model <id>]` marks the next pending task **running** and spawns your agent hook (`BP_RUN_AGENT_SCRIPT`, etc.; default Cursor backend accepts `--model`, e.g. `composer-2.5`). Agents read canonical text with `bp read plan`, `bp read current`, or `bp read <id>`.
-4. **Wrap-up:** agents run `bp complete --notes "..."` to persist notes and mark **complete**; `bp reset <id>` returns a task to **pending** if work must be redone. `bp status` shows active runs (pid + task) or warns when a task is stale **running** after interrupt/sleep.
-
-For CI and deterministic integration tests, `BP_RUN_SKIP_AGENT=1` completes tasks without spawning an agent.
-
-Behavior details and error messages are specified in `.loop/cli-contract.md`; user-facing overview is in `README.md`.
+User-facing config is **flags only** on `bp run`. CI uses `BP_RUN_SKIP_AGENT=1` internally.

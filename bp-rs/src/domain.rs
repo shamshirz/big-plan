@@ -72,6 +72,78 @@ impl fmt::Display for TaskStatus {
     }
 }
 
+// --- TaskKind ---
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskKind {
+    /// Decomposes a goal plan into executable tasks via `bp add`.
+    Plan,
+    Execute,
+}
+
+impl TaskKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TaskKind::Plan => "plan",
+            TaskKind::Execute => "execute",
+        }
+    }
+
+    pub fn parse(s: &str) -> Result<Self, DomainError> {
+        match s {
+            "plan" => Ok(TaskKind::Plan),
+            "execute" => Ok(TaskKind::Execute),
+            _ => Err(DomainError::InvalidTaskKind(s.to_owned())),
+        }
+    }
+}
+
+// --- GoalStatus ---
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GoalStatus {
+    Active,
+    Complete,
+    Archived,
+}
+
+impl GoalStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GoalStatus::Active => "active",
+            GoalStatus::Complete => "complete",
+            GoalStatus::Archived => "archived",
+        }
+    }
+
+    pub fn parse(s: &str) -> Result<Self, DomainError> {
+        match s {
+            "active" => Ok(GoalStatus::Active),
+            "complete" => Ok(GoalStatus::Complete),
+            "archived" => Ok(GoalStatus::Archived),
+            _ => Err(DomainError::InvalidGoalStatus(s.to_owned())),
+        }
+    }
+}
+
+impl fmt::Display for GoalStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+// --- Goal ---
+
+/// A goal is a bounded run sequence: one plan decomposed into tasks, then executed.
+#[derive(Debug, Clone)]
+pub struct Goal {
+    pub id: u64,
+    pub title: String,
+    pub plan_md: String,
+    pub created_at: DateTime<Utc>,
+    pub status: GoalStatus,
+}
+
 // --- Task ---
 
 /// Core domain entity representing a unit of work.
@@ -79,6 +151,8 @@ impl fmt::Display for TaskStatus {
 pub struct Task {
     pub id: TaskId,
     pub seq: u32,
+    pub goal_id: u64,
+    pub kind: TaskKind,
     pub title: String,
     pub status: TaskStatus,
     pub depends_on: Vec<TaskId>,
@@ -97,10 +171,12 @@ pub struct Task {
 }
 
 impl Task {
-    pub fn new(seq: u32, title: String, created_at: DateTime<Utc>) -> Self {
+    pub fn new(seq: u32, goal_id: u64, kind: TaskKind, title: String, created_at: DateTime<Utc>) -> Self {
         Task {
             id: TaskId::from_seq(seq),
             seq,
+            goal_id,
+            kind,
             title,
             status: TaskStatus::Pending,
             depends_on: vec![],
@@ -268,6 +344,8 @@ pub enum DomainError {
     InvalidTaskId(String),
     InvalidStatus(String),
     InvalidEventType(String),
+    InvalidTaskKind(String),
+    InvalidGoalStatus(String),
     InvalidTransition { from: TaskStatus, to: TaskStatus },
     TitleEmpty,
     AlreadyRunning(String),
@@ -282,6 +360,8 @@ impl fmt::Display for DomainError {
             DomainError::InvalidTaskId(id) => write!(f, "invalid task id: '{id}'"),
             DomainError::InvalidStatus(s) => write!(f, "invalid status: '{s}'"),
             DomainError::InvalidEventType(s) => write!(f, "invalid event type: '{s}'"),
+            DomainError::InvalidTaskKind(s) => write!(f, "invalid task kind: '{s}'"),
+            DomainError::InvalidGoalStatus(s) => write!(f, "invalid goal status: '{s}'"),
             DomainError::InvalidTransition { from, to } => {
                 write!(f, "invalid transition: {from} -> {to}")
             }
@@ -456,7 +536,13 @@ mod tests {
     }
 
     fn pending_task() -> Task {
-        Task::new(1, "Do something".to_owned(), ts(2026, 5, 7, 10, 0, 0))
+        Task::new(
+            1,
+            1,
+            TaskKind::Execute,
+            "Do something".to_owned(),
+            ts(2026, 5, 7, 10, 0, 0),
+        )
     }
 
     // --- TaskId ---
@@ -699,7 +785,11 @@ mod tests {
 
     #[test]
     fn already_running_error_includes_formatted_task_id() {
-        let running = transition_start(Task::new(5, "a".to_owned(), ts(2026, 5, 7, 10, 0, 0)), ts(2026, 5, 7, 10, 1, 0)).unwrap();
+        let running = transition_start(
+            Task::new(5, 1, TaskKind::Execute, "a".to_owned(), ts(2026, 5, 7, 10, 0, 0)),
+            ts(2026, 5, 7, 10, 1, 0),
+        )
+        .unwrap();
         let err = check_no_running_task(&[running]).unwrap_err();
         if let DomainError::AlreadyRunning(id) = err {
             assert_eq!(id, "005");
@@ -783,8 +873,8 @@ mod tests {
 
     #[test]
     fn next_pending_returns_lowest_seq() {
-        let t1 = Task::new(1, "first".to_owned(), ts(2026, 5, 7, 10, 0, 0));
-        let t2 = Task::new(2, "second".to_owned(), ts(2026, 5, 7, 10, 0, 0));
+        let t1 = Task::new(1, 1, TaskKind::Execute, "first".to_owned(), ts(2026, 5, 7, 10, 0, 0));
+        let t2 = Task::new(2, 1, TaskKind::Execute, "second".to_owned(), ts(2026, 5, 7, 10, 0, 0));
         let tasks = vec![t2, t1]; // out of order
         let next = next_pending(&tasks).unwrap();
         assert_eq!(next.seq, 1);
@@ -793,11 +883,11 @@ mod tests {
     #[test]
     fn next_pending_skips_non_pending() {
         let t1 = transition_start(
-            Task::new(1, "first".to_owned(), ts(2026, 5, 7, 10, 0, 0)),
+            Task::new(1, 1, TaskKind::Execute, "first".to_owned(), ts(2026, 5, 7, 10, 0, 0)),
             ts(2026, 5, 7, 10, 1, 0),
         )
         .unwrap();
-        let t2 = Task::new(2, "second".to_owned(), ts(2026, 5, 7, 10, 0, 0));
+        let t2 = Task::new(2, 1, TaskKind::Execute, "second".to_owned(), ts(2026, 5, 7, 10, 0, 0));
         let tasks = [t1, t2];
         let next = next_pending(&tasks).unwrap();
         assert_eq!(next.seq, 2);
@@ -806,7 +896,7 @@ mod tests {
     #[test]
     fn next_pending_none_when_all_done() {
         let t = transition_start(
-            Task::new(1, "only".to_owned(), ts(2026, 5, 7, 10, 0, 0)),
+            Task::new(1, 1, TaskKind::Execute, "only".to_owned(), ts(2026, 5, 7, 10, 0, 0)),
             ts(2026, 5, 7, 10, 1, 0),
         )
         .unwrap();

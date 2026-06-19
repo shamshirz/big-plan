@@ -13,29 +13,34 @@ This repository defines **big-plan**: a task-orchestration CLI invoked as **`bp`
 
 ## PoC Product Requirements
 
-- `cargo install` friendly executable: Rust crate **`big-plan`** produces binary **`bp`** (`cargo install --path bp-rs` from this repo, or `cargo install big-plan` once published; see `README.md`).
-- Project-local hidden state in the cwd where CLI is invoked.
-- SQLite-backed task/event persistence within that hidden directory.
+- `cargo install --path bp-rs` friendly executable: crate **`big-plan`** produces binary **`bp`**.
+- Project-local hidden state in `.loop/` (gitignored runtime; not source of truth in git).
+- SQLite-backed tasks, goals, and events.
 - Sequential task execution with clear status and completion metadata.
 
 ## Public CLI Surface (PoC release)
 
-These commands are the supported user-facing API of the Rust PoC; keep outputs and errors aligned with `.loop/cli-contract.md` (update that doc to say `bp` when migrating off Python).
-
 - `bp init`
+- `bp goal new` / `bp goal list`
+- `bp run [plan.md] [--model <cursor-model-id>] [--backend cursor|claude]`
 - `bp add "<title>"`
 - `bp status`
 - `bp show <task-id>`
 - `bp read plan|current|<task-id>`
-- `bp run [--model <cursor-model-id>]`
 - `bp complete [--notes "..."] [--if-running]`
 - `bp reset <task-id>`
+- `bp summary [--json]`
 
 ## Prompt Layering Contract
 
 Each `bp run` task agent should receive:
-1. universal guidance
-2. project-specific context
-3. task-specific context
+1. universal guidance (abbreviated `bp` usage + `.loop/SKILL.md` path)
+2. project-specific context (`.loop/agent-project.md`)
+3. task-specific context (SQLite task rendered as markdown)
 
-This order is intentional and should be preserved.
+Planning tasks (`bp run plan.md`) use plan-decomposition guidance instead of normal task markdown.
+
+## Docs split
+
+- **`SKILL.md`** — using `bp` in any project (copied to `.loop/SKILL.md` on init).
+- **`AGENT.md`** — agents modifying this repo.

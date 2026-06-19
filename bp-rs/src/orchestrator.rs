@@ -9,8 +9,9 @@ use chrono::Utc;
 use crate::agent_stream::AgentUsageMetrics;
 use crate::domain::{
     check_no_running_task, merge_completion_metrics, next_pending, transition_complete,
-    transition_fail, transition_start, CompletionData, DomainError, Task, TaskStatus,
+    transition_fail, transition_start, CompletionData, DomainError, Task, TaskKind, TaskStatus,
 };
+use crate::prompts::{PLAN_DECOMPOSITION_GUIDANCE, UNIVERSAL_GUIDANCE};
 use crate::render::render_task_markdown;
 use crate::repository::{LoopError, TaskRepository};
 use crate::run_lock;
@@ -21,10 +22,11 @@ pub struct AgentOutcome {
     pub usage: AgentUsageMetrics,
 }
 
-/// Options for `bp run` (CLI flags with env fallbacks applied in `commands::run`).
+/// Options for `bp run` (CLI flags only; CI uses BP_RUN_SKIP_AGENT internally).
 #[derive(Debug, Clone, Default)]
 pub struct RunConfig {
     pub agent_model: Option<String>,
+    pub backend: Option<String>,
 }
 
 struct RunLockGuard<'a> {
@@ -37,18 +39,11 @@ impl Drop for RunLockGuard<'_> {
     }
 }
 
-/// Universal prompt slice (stable, installable without repo-local `AGENT.md`).
-const DEFAULT_UNIVERSAL_GUIDANCE: &str = "# Universal guidance\n\n\
-- Execute exactly one planning task unless told otherwise.\n\
-- Keep edits minimal and focused; avoid unrelated refactors.\n\
-- Record outcomes with `bp complete [--notes \"...\"]` when finished.\n\
-- Use `bp read plan`, `bp read current`, or `bp read <id>` for canonical task text.\n\
-\n";
 
-/// Runs pending tasks until none remain, or until an agent failure / stall.
+/// Runs pending tasks in the active goal until none remain, or until an agent failure / stall.
 pub fn execute_run(repo: &dyn TaskRepository, project_root: &Path, config: &RunConfig) -> i32 {
     loop {
-        let tasks = match repo.list_tasks() {
+        let tasks = match repo.list_active_goal_tasks() {
             Ok(t) => t,
             Err(LoopError::NotInitialized) => {
                 eprintln!("error: bp not initialized — run `bp init` first");
@@ -159,7 +154,7 @@ pub fn execute_run(repo: &dyn TaskRepository, project_root: &Path, config: &RunC
 
         let commit_sha = git_commit_after_task(project_root, git_head_before.as_deref());
 
-        let tasks_after = match repo.list_tasks() {
+        let tasks_after = match repo.list_active_goal_tasks() {
             Ok(t) => t,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -200,7 +195,7 @@ pub fn execute_run(repo: &dyn TaskRepository, project_root: &Path, config: &RunC
 }
 
 fn load_running_task(repo: &dyn TaskRepository, task_id: &str) -> Result<Task, i32> {
-    let tasks = match repo.list_tasks() {
+    let tasks = match repo.list_active_goal_tasks() {
         Ok(t) => t,
         Err(e) => {
             eprintln!("error: {e}");
@@ -217,12 +212,7 @@ fn load_running_task(repo: &dyn TaskRepository, task_id: &str) -> Result<Task, i
 }
 
 fn run_skip_agent_enabled() -> bool {
-    env_truthy_two_keys("BP_RUN_SKIP_AGENT", "LOOP_RUN_SKIP_AGENT")
-}
-
-fn env_truthy_two_keys(primary: &str, legacy: &str) -> bool {
-    std::env::var(primary)
-        .or_else(|_| std::env::var(legacy))
+    std::env::var("BP_RUN_SKIP_AGENT")
         .ok()
         .map(|v| {
             let v = v.trim().to_ascii_lowercase();
@@ -232,6 +222,26 @@ fn env_truthy_two_keys(primary: &str, legacy: &str) -> bool {
 }
 
 fn assemble_layered_prompt(repo: &dyn TaskRepository, task: &Task) -> Result<String, LoopError> {
+    let skill_path = repo.skill_path();
+    let universal = format!(
+        "## Universal Guidance\n\n{UNIVERSAL_GUIDANCE}Skill file: `{skill_path}`\n"
+    );
+
+    if task.kind == TaskKind::Plan {
+        let project_md = repo.read_agent_project()?.trim().to_owned();
+        let project_slice = if project_md.is_empty() {
+            String::new()
+        } else {
+            format!("## Project-Specific Context\n\n{project_md}\n\n---\n\n")
+        };
+        return Ok(format!(
+            "{universal}---\n\n{PLAN_DECOMPOSITION_GUIDANCE}\
+             ---\n\n{project_slice}## Plan\n\n{}\n\n---\n\n## Acceptance\n\n{}\n",
+            task.description_md.trim(),
+            task.acceptance_md.trim(),
+        ));
+    }
+
     let project_md = repo.read_agent_project()?.trim().to_owned();
     let project_slice = if project_md.is_empty() {
         "(no project context)\n".to_owned()
@@ -240,8 +250,7 @@ fn assemble_layered_prompt(repo: &dyn TaskRepository, task: &Task) -> Result<Str
     };
 
     Ok(format!(
-        "## Universal Guidance\n\n{DEFAULT_UNIVERSAL_GUIDANCE}\
-         ---\n\n## Project-Specific Context\n\n{project_slice}\
+        "{universal}---\n\n## Project-Specific Context\n\n{project_slice}\
          ---\n\n## Task-Specific Context\n\n{}",
         render_task_markdown(task)
     ))
@@ -249,14 +258,7 @@ fn assemble_layered_prompt(repo: &dyn TaskRepository, task: &Task) -> Result<Str
 
 /// Spawns the agent subprocess with the composed prompt on stdin.
 ///
-/// Environment (prefer `BP_*`; `LOOP_*` is still accepted):
-/// - `BP_RUN_AGENT_SHELL` / `LOOP_RUN_AGENT_SHELL`: shell executable (default: `sh`).
-/// - `BP_RUN_AGENT_SCRIPT` / `LOOP_RUN_AGENT_SCRIPT`: argument to `shell -c` (highest priority).
-/// - `BP_AGENT_BACKEND` / `LOOP_AGENT_BACKEND`: `cursor` (default) or `claude`
-///   when no explicit script is provided.
-///
-/// Backend defaults automatically read prompt text from stdin and invoke
-/// `bp complete` on successful exit, so users do not need to handcraft scripts.
+/// Override for tests/CI only: `BP_RUN_AGENT_SCRIPT` passed to `sh -c`.
 pub fn invoke_agent(
     prompt: &str,
     project_root: &Path,
@@ -296,23 +298,19 @@ pub fn invoke_agent(
 }
 
 fn agent_shell_and_script(bp_cmd: &str, config: &RunConfig) -> (String, String) {
-    let shell = std::env::var("BP_RUN_AGENT_SHELL")
-        .or_else(|_| std::env::var("LOOP_RUN_AGENT_SHELL"))
-        .unwrap_or_else(|_| "sh".to_string());
-    let script = match std::env::var("BP_RUN_AGENT_SCRIPT")
-        .or_else(|_| std::env::var("LOOP_RUN_AGENT_SCRIPT"))
-    {
-        Ok(s) => s,
-        Err(_) => {
-            let backend = std::env::var("BP_AGENT_BACKEND")
-                .or_else(|_| std::env::var("LOOP_AGENT_BACKEND"))
-                .unwrap_or_else(|_| "cursor".to_string())
-                .trim()
-                .to_ascii_lowercase();
-            match backend.as_str() {
-                "claude" => default_claude_script(bp_cmd, config.agent_model.as_deref()),
-                _ => default_cursor_script(bp_cmd, config.agent_model.as_deref()),
-            }
+    let shell = std::env::var("BP_RUN_AGENT_SHELL").unwrap_or_else(|_| "sh".to_string());
+    let script = if let Ok(s) = std::env::var("BP_RUN_AGENT_SCRIPT") {
+        s
+    } else {
+        let backend = config
+            .backend
+            .as_deref()
+            .unwrap_or("cursor")
+            .trim()
+            .to_ascii_lowercase();
+        match backend.as_str() {
+            "claude" => default_claude_script(bp_cmd, config.agent_model.as_deref()),
+            _ => default_cursor_script(bp_cmd, config.agent_model.as_deref()),
         }
     };
     (shell, script)
@@ -415,7 +413,7 @@ fn patch_agent_metrics(
 }
 
 fn fail_task_and_stop(repo: &dyn TaskRepository, task_id: &str, exit_detail: &str) -> i32 {
-    let tasks = match repo.list_tasks() {
+    let tasks = match repo.list_active_goal_tasks() {
         Ok(t) => t,
         Err(e) => {
             eprintln!("error: {e}");
@@ -472,7 +470,13 @@ mod tests {
         fn add_task(&self, _title: &str) -> Result<Task, LoopError> {
             unimplemented!()
         }
+        fn add_planning_task(&self, _title: &str, _plan_md: &str) -> Result<Task, LoopError> {
+            unimplemented!()
+        }
         fn list_tasks(&self) -> Result<Vec<Task>, LoopError> {
+            unimplemented!()
+        }
+        fn list_active_goal_tasks(&self) -> Result<Vec<Task>, LoopError> {
             unimplemented!()
         }
         fn get_task(&self, _id: &str) -> Result<Task, LoopError> {
@@ -487,6 +491,21 @@ mod tests {
         fn read_agent_project(&self) -> Result<String, LoopError> {
             Ok(self.project.clone())
         }
+        fn read_skill(&self) -> Result<String, LoopError> {
+            Ok(String::new())
+        }
+        fn skill_path(&self) -> String {
+            ".loop/SKILL.md".to_owned()
+        }
+        fn create_goal(&self, _title: &str, _plan_md: &str) -> Result<crate::domain::Goal, LoopError> {
+            unimplemented!()
+        }
+        fn list_goals(&self) -> Result<Vec<crate::domain::Goal>, LoopError> {
+            unimplemented!()
+        }
+        fn get_active_goal(&self) -> Result<crate::domain::Goal, LoopError> {
+            unimplemented!()
+        }
         fn list_events(&self) -> Result<Vec<crate::domain::Event>, LoopError> {
             Ok(vec![])
         }
@@ -495,7 +514,13 @@ mod tests {
     #[test]
     fn layered_prompt_ordering() {
         let ts = Utc.with_ymd_and_hms(2026, 5, 7, 12, 0, 0).unwrap();
-        let task = Task::new(3, "Do the work".to_owned(), ts);
+        let task = Task::new(
+            3,
+            1,
+            TaskKind::Execute,
+            "Do the work".to_owned(),
+            ts,
+        );
         let repo = FakeRepo {
             project: "Project slice here.".to_owned(),
         };
@@ -509,9 +534,9 @@ mod tests {
     }
 
     #[test]
-    fn universal_guidance_mentions_bp_not_loop() {
-        assert!(DEFAULT_UNIVERSAL_GUIDANCE.contains("bp complete"));
-        assert!(DEFAULT_UNIVERSAL_GUIDANCE.contains("bp read"));
+    fn universal_guidance_mentions_bp_commands() {
+        assert!(UNIVERSAL_GUIDANCE.contains("bp complete"));
+        assert!(UNIVERSAL_GUIDANCE.contains("bp read"));
     }
 
     #[test]

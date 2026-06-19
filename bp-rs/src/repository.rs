@@ -1,4 +1,4 @@
-use crate::domain::Task;
+use crate::domain::{Goal, Task};
 use std::fmt;
 
 #[derive(Debug)]
@@ -36,7 +36,10 @@ impl fmt::Display for LoopError {
 pub trait TaskRepository {
     fn initialize(&self) -> Result<(), LoopError>;
     fn add_task(&self, title: &str) -> Result<Task, LoopError>;
+    fn add_planning_task(&self, title: &str, plan_md: &str) -> Result<Task, LoopError>;
     fn list_tasks(&self) -> Result<Vec<Task>, LoopError>;
+    /// Tasks belonging to the active goal only.
+    fn list_active_goal_tasks(&self) -> Result<Vec<Task>, LoopError>;
     /// Look up a task by its raw id string (e.g. "003"). Returns TaskNotFound for
     /// both unknown IDs and malformed ID strings.
     fn get_task(&self, id: &str) -> Result<Task, LoopError>;
@@ -44,6 +47,12 @@ pub trait TaskRepository {
     fn read_plan(&self) -> Result<String, LoopError>;
     /// Contents of `.loop/agent-project.md` for agent prompt layering (project slice).
     fn read_agent_project(&self) -> Result<String, LoopError>;
+    /// Contents of `.loop/SKILL.md` for agent reference.
+    fn read_skill(&self) -> Result<String, LoopError>;
+    fn skill_path(&self) -> String;
+    fn create_goal(&self, title: &str, plan_md: &str) -> Result<Goal, LoopError>;
+    fn list_goals(&self) -> Result<Vec<Goal>, LoopError>;
+    fn get_active_goal(&self) -> Result<Goal, LoopError>;
     /// Lifecycle audit events in chronological order.
     fn list_events(&self) -> Result<Vec<crate::domain::Event>, LoopError>;
 }

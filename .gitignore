@@ -1,9 +1,6 @@
-__pycache__/
-*.pyc
-
 # Rust build artifacts
 target/
 bp-rs/target/
 
-# Runtime state (project-local, not source of truth)
+# Runtime state (project-local SQLite + agent templates; like llm's history DB)
 .loop/

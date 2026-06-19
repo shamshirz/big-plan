@@ -20,11 +20,8 @@ fn run_in(dir: &Path, args: &[&str]) -> std::process::Output {
 
 /// Clear env flags inherited from the developer/CI host so `bp run` behaves like a fresh shell.
 fn clear_run_env(cmd: &mut Command) {
-    cmd
-        .env_remove("BP_RUN_SKIP_AGENT")
-        .env_remove("LOOP_RUN_SKIP_AGENT")
-        .env_remove("BP_RUN_AGENT_SCRIPT")
-        .env_remove("LOOP_RUN_AGENT_SCRIPT");
+    cmd.env_remove("BP_RUN_SKIP_AGENT")
+        .env_remove("BP_RUN_AGENT_SCRIPT");
 }
 
 fn output_utf8(out: &std::process::Output) -> (String, String) {
@@ -146,20 +143,31 @@ fn run_completes_when_agent_shell_invokes_bp_complete() {
 }
 
 #[test]
-fn run_completes_when_legacy_loop_env_script_set() {
+fn run_from_plan_creates_goal_and_planning_task() {
     let tmp = TempDir::new().expect("tempdir");
     init_project(tmp.path());
-    assert!(run_in(tmp.path(), &["add", "legacy env"]).status.success());
-    let exe = bp_bin().display().to_string();
-    let script = format!("exec '{exe}' complete --notes 'legacy'");
+    std::fs::write(
+        tmp.path().join("plan.md"),
+        "# Simplification\n\nDo the thing.\n",
+    )
+    .unwrap();
     let mut cmd = Command::new(bp_bin());
-    cmd.current_dir(tmp.path()).arg("run");
-    clear_run_env(&mut cmd);
-    cmd.env("LOOP_RUN_AGENT_SCRIPT", &script);
+    cmd.current_dir(tmp.path())
+        .args(["run", "plan.md"])
+        .env("BP_RUN_SKIP_AGENT", "1");
     let out = cmd.output().expect("spawn run");
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let (stdout, _) = output_utf8(&out);
-    assert!(stdout.contains("Task 001 complete"));
+    assert!(stdout.contains("Started goal"));
+    assert!(stdout.contains("planning task"));
+    let status = run_in(tmp.path(), &["status"]);
+    let (listing, _) = output_utf8(&status);
+    assert!(listing.contains("Goal"));
+    assert!(listing.contains("Plan:"));
 }
 
 #[test]
@@ -336,10 +344,10 @@ fn seed_completed_task(
     let db = dir.join(".loop").join("loop.db");
     let conn = rusqlite::Connection::open(&db).expect("open loop.db");
     conn.execute(
-        "INSERT INTO tasks (id, seq, title, status, depends_on, created_at, started_at, \
+        "INSERT INTO tasks (id, seq, goal_id, kind, title, status, depends_on, created_at, started_at, \
          completed_at, duration_seconds, completion_notes_md, input_tokens, output_tokens, \
          model, commit_sha) \
-         VALUES (?1, ?2, ?3, 'complete', '[]', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+         VALUES (?1, ?2, 1, 'execute', ?3, 'complete', '[]', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             id,
             seq,

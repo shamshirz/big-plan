@@ -8,7 +8,13 @@ pub enum Command {
     Status,
     Show { id: String },
     Read { target: ReadTarget },
-    Run { agent_model: Option<String> },
+    Run {
+        plan_file: Option<String>,
+        agent_model: Option<String>,
+        backend: Option<String>,
+    },
+    GoalNew,
+    GoalList,
     Complete {
         notes: Option<String>,
         if_running: bool,
@@ -56,6 +62,7 @@ pub fn parse_from(args: &[String]) -> Result<Command, ParseError> {
         Some("complete") => parse_complete(&args[1..]),
         Some("reset") => parse_reset(&args[1..]),
         Some("summary") => parse_summary(&args[1..]),
+        Some("goal") => parse_goal(&args[1..]),
         Some(unknown) => Err(ParseError::UnknownCommand(unknown.to_owned())),
     }
 }
@@ -86,7 +93,38 @@ fn parse_read(args: &[String]) -> Result<Command, ParseError> {
 
 fn parse_run(args: &[String]) -> Result<Command, ParseError> {
     let agent_model = extract_flag_value(args, "--model")?;
-    Ok(Command::Run { agent_model })
+    let backend = extract_flag_value(args, "--backend")?;
+    let plan_file = first_positional_arg(args);
+    Ok(Command::Run {
+        plan_file,
+        agent_model,
+        backend,
+    })
+}
+
+fn parse_goal(args: &[String]) -> Result<Command, ParseError> {
+    match args.first().map(String::as_str) {
+        Some("new") => Ok(Command::GoalNew),
+        Some("list") => Ok(Command::GoalList),
+        Some(other) => Err(ParseError::UnknownCommand(format!("goal {other}"))),
+        None => Err(ParseError::UnknownCommand("goal".to_owned())),
+    }
+}
+
+fn first_positional_arg(args: &[String]) -> Option<String> {
+    let mut i = 0;
+    while i < args.len() {
+        if args[i].starts_with("--") {
+            if args[i] == "--model" || args[i] == "--backend" {
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        return Some(args[i].clone());
+    }
+    None
 }
 
 fn parse_complete(args: &[String]) -> Result<Command, ParseError> {
@@ -245,8 +283,49 @@ mod tests {
     fn parse_run() {
         assert_eq!(
             parse_from(&args("run")),
-            Ok(Command::Run { agent_model: None })
+            Ok(Command::Run {
+                plan_file: None,
+                agent_model: None,
+                backend: None,
+            })
         );
+    }
+
+    #[test]
+    fn parse_run_with_plan_file() {
+        let a = ["run".to_owned(), "plan.md".to_owned()];
+        assert_eq!(
+            parse_from(&a),
+            Ok(Command::Run {
+                plan_file: Some("plan.md".to_owned()),
+                agent_model: None,
+                backend: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_run_with_model_and_plan() {
+        let a = [
+            "run".to_owned(),
+            "--model".to_owned(),
+            "composer-2.5".to_owned(),
+            "docs/plan.md".to_owned(),
+        ];
+        assert_eq!(
+            parse_from(&a),
+            Ok(Command::Run {
+                plan_file: Some("docs/plan.md".to_owned()),
+                agent_model: Some("composer-2.5".to_owned()),
+                backend: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_goal_new_and_list() {
+        assert_eq!(parse_from(&args("goal new")), Ok(Command::GoalNew));
+        assert_eq!(parse_from(&args("goal list")), Ok(Command::GoalList));
     }
 
     #[test]
@@ -259,7 +338,9 @@ mod tests {
         assert_eq!(
             parse_from(&a),
             Ok(Command::Run {
-                agent_model: Some("composer-2.5".to_owned())
+                plan_file: None,
+                agent_model: Some("composer-2.5".to_owned()),
+                backend: None,
             })
         );
     }

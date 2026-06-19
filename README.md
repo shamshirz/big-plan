@@ -1,126 +1,82 @@
 # big-plan
 
-**big-plan** is a project-local CLI (**`bp`**) for orchestrating task-focused agent sessions, with state in **SQLite** under `.loop/` in whatever directory you run it from.
+**big-plan** is a project-local CLI (**`bp`**) for orchestrating task-focused agent sessions. State lives in SQLite under `.loop/` (runtime only — gitignored, like [Simon Willison's `llm` CLI](https://github.com/simonw/llm) history DB).
 
 - **Crate name (Cargo):** `big-plan`
-- **Binary name:** `bp` (e.g. `bp init`, `bp run`, `bp add "…"`)
+- **Binary name:** `bp`
 
 ## Install
 
-Rust 1.74+ (edition 2021) recommended.
+Rust 1.74+ (edition 2021).
 
 ```bash
-# From this repo (development)
-cargo install --path bp-rs
+# From this repo
+cargo install --path bp-rs --force
 ```
 
-The installed executable is **`bp`**. Ensure `~/.cargo/bin` is on your `PATH`.
+Ensure `~/.cargo/bin` is on your `PATH`. Clone this repo on each machine and reinstall — no crates.io publish required.
 
-After publishing to crates.io: `cargo install big-plan` (binary still **`bp`**).
+## Concepts
+
+| Term | Meaning |
+|------|---------|
+| **Goal** | A bounded run sequence: one plan decomposed into tasks, then executed one-by-one. |
+| **Task** | A single unit of work in SQLite — each gets a fresh agent context window. |
+| **`.loop/`** | Runtime directory (`loop.db`, `SKILL.md`, optional `agent-project.md`). Not committed. |
 
 ## Quick start
 
 ```bash
 cd your-project
 bp init
-bp add "First concrete task"
-bp status
-bp run                    # see “Agent / run” below
+bp run docs/my-plan.md          # new goal + planning agent creates tasks
+bp run                          # execute pending tasks in the active goal
+bp summary                      # report when done
 ```
 
-Help: `bp`, `bp -h`, and `bp --help` are equivalent.
+Start a fresh goal without a plan file:
+
+```bash
+bp goal new
+bp add "First task"
+bp run
+```
 
 ## Commands
 
 | Command | Purpose |
 |--------|---------|
-| `bp init` | Create `.loop/`, `loop.db`, seed `plan.md` and `agent-project.md` |
-| `bp add "<title>"` | Add a pending task |
-| `bp status` | List tasks (id, status, title) |
-| `bp show <id>` | Full task detail |
-| `bp summary [--json] [--since <id>] [--last-run]` | Post-run report: wall clock, agent time, tokens, per-task commits |
-| `bp read plan` / `current` / `<id>` | Markdown for agents |
-| `bp run [--model <id>]` | Run pending tasks one-by-one (agent hook + layered prompt) |
-| `bp complete [--notes "..."] [--if-running]` | Mark the **running** task complete (`--if-running` no-ops silently) |
-| `bp reset <id>` | Put task back to `pending`; clear run metrics |
+| `bp init` | Create `.loop/`, SQLite schema, seed `SKILL.md` |
+| `bp goal new` | Start a new active goal (archives the previous one) |
+| `bp goal list` | List goals (`*` = active) |
+| `bp run [plan.md] [--model <id>] [--backend cursor\|claude]` | Run active goal; optional plan file starts a new goal first |
+| `bp add "<title>"` | Add a pending task to the active goal |
+| `bp status` | Active goal + task queue |
+| `bp show <id>` | Human-readable task detail |
+| `bp read plan\|current\|<id>` | Markdown for agents |
+| `bp complete [--notes "..."] [--if-running]` | Mark the running task complete |
+| `bp reset <id>` | Return a task to pending |
+| `bp summary [--json]` | Post-run report (wall clock, tokens, commits) |
 
-## Agent / `bp run`
+## Agent workflow
 
-1. Next **pending** task becomes **running** and receives a prompt: **universal → `.loop/agent-project.md` → task markdown**.
-2. `bp run` runs **`$BP_RUN_AGENT_SHELL -c "$BP_RUN_AGENT_SCRIPT"`** with that prompt on the subprocess **stdin** (same pattern as `sh -c '… $(cat) …'`).
-3. When the child exits **0**, `bp` checks that the task was marked **complete** (typically the agent ran **`bp complete`** in the same project directory). Default **cursor** and **claude** backends use **`--output-format stream-json`**; `bp run` parses the final `result` event for token usage and merges **model** / **commit** into the task when the agent did not set `BP_COMPLETE_*`.
-4. On failure exit code, the task is marked **failed** and `bp run` stops.
+1. **Planning** — `bp run plan.md` runs one planning task. The agent reads the plan and creates tasks with `bp add`, then `bp complete`.
+2. **Execution** — `bp run` runs each pending task sequentially. Agents use `bp read current`, implement scope, `bp complete`.
 
-After a multi-task queue finishes, run **`bp summary`** for wall-clock span, per-task timing, tokens, and one-line commits (no manual SQLite).
+Every agent prompt includes a short `bp` usage guide plus a pointer to `.loop/SKILL.md`. Optional project notes: edit `.loop/agent-project.md`.
 
-### Environment variables
-
-| Variable | Meaning |
-|----------|---------|
-| **`BP_RUN_SKIP_AGENT=1`** | **CI / integration default:** do not spawn an agent; auto-complete each task with a synthetic note (no subprocess). |
-| **`BP_AGENT_BACKEND`** | Backend adapter when no explicit script is set: `cursor` (default) or `claude`. |
-| **`BP_AGENT_MODEL`** | Cursor model id for `bp run` when `--model` is not passed (e.g. `composer-2.5`). |
-| **`BP_RUN_AGENT_SHELL`** | Shell (default `sh`). `LOOP_RUN_AGENT_SHELL` still works. |
-| **`BP_RUN_AGENT_SCRIPT`** | Full override script passed to `shell -c` (advanced). `LOOP_RUN_AGENT_SCRIPT` still works. |
-| **`BP_COMPLETE_*`** | Optional metrics when completing (see `commands.rs`): `INPUT_TOKENS`, `OUTPUT_TOKENS`, `MODEL`, `COMMIT_SHA`. `LOOP_COMPLETE_*` still accepted. Overrides orchestrator-parsed values when set. |
-
-### Example: Cursor Agent
-
-Authenticate once (`cursor agent login`). Then:
-
-```bash
-export BP_AGENT_BACKEND=cursor   # default, can omit
-bp run --model composer-2.5      # pin model (or: export BP_AGENT_MODEL=composer-2.5)
-```
-
-`bp status` reports an **active** `bp run` (pid + task) while a queue is executing, or warns when a task is **stale running** after sleep/crash — run `bp reset <id>` and `bp run` again.
-
-### Example: Claude Code
-
-```bash
-export BP_AGENT_BACKEND=claude
-bp run
-```
-
-`bp` already has built-in backend adapters, so you usually do **not** need `BP_RUN_AGENT_SCRIPT`.
-Use `BP_RUN_AGENT_SCRIPT` only if you want a custom launch command.
+Default backend is Cursor (`cursor agent …`). Use `--backend claude` for Claude Code.
 
 ## Tests
-
-From **`bp-rs/`** (crate package **`big-plan`**, targets include binary **`bp`**):
-
-```bash
-cd bp-rs
-cargo test
-```
-
-From the **repository root** (same invocation CI uses):
 
 ```bash
 cargo test --manifest-path bp-rs/Cargo.toml
 ```
 
-Package-scoped variants use **`-p big-plan`** (helpful when a workspace grows; harmless in this single-package tree).
+Integration tests use `BP_RUN_SKIP_AGENT=1` for deterministic runs. Opt-in real-agent smoke: see `bp-rs/tests/real_agent.rs`.
 
-- **Unit tests:** `domain`, `cli`, `render`, `sqlite_repo`, `orchestrator` modules.
-- **Integration tests:** `tests/cli_integration.rs` spawns the real **`bp`** binary in temp dirs. The main end-to-end path uses **`BP_RUN_SKIP_AGENT=1`** for deterministic full queue runs; other cases use **`BP_RUN_AGENT_SCRIPT`** to invoke `bp complete` without a real LLM.
-- **CI:** `.github/workflows/ci.yml` runs **`cargo test --manifest-path bp-rs/Cargo.toml`** from the repo root.
-- **Real agent (opt-in):** `tests/real_agent.rs` is **`#[ignore]`**. Run manually when authenticated and willing to spend tokens:
+## Repo layout
 
-```bash
-# from bp-rs/
-BP_REAL_AGENT_BACKEND=cursor cargo test -p big-plan real_agent_smoke -- --ignored --nocapture
-
-# same from repo root
-BP_REAL_AGENT_BACKEND=cursor cargo test --manifest-path bp-rs/Cargo.toml -p big-plan real_agent_smoke -- --ignored --nocapture
-# or: BP_REAL_AGENT_BACKEND=claude …
-```
-
-## Layout
-
-- `bp-rs/` — Rust crate `big-plan`, binary **`bp`**
-- `.loop/` — per-project state (when initialized): `loop.db`, `plan.md`, `agent-project.md`, etc.
-
-## Next steps (this repo)
-
-Use **`bp`** in this repository to track follow-ups (e.g. Python removal, publishing `big-plan` to crates.io). Run **`bp status`** after **`bp init`** if you use SQLite-backed tasks here.
+- `bp-rs/` — Rust crate `big-plan`, binary `bp`
+- `SKILL.md` — canonical skill doc (copied to `.loop/SKILL.md` on init)
+- `AGENT.md` — guidance for agents modifying **this** repo

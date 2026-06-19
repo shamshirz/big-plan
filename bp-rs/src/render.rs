@@ -153,7 +153,7 @@ pub fn fmt_tokens_compact(n: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{Task, TaskId, TaskStatus};
+    use crate::domain::{Task, TaskId, TaskKind, TaskStatus};
     use chrono::TimeZone;
 
     fn ts(y: i32, mo: u32, d: u32, h: u32, min: u32, s: u32) -> DateTime<Utc> {
@@ -161,13 +161,21 @@ mod tests {
     }
 
     fn minimal_task() -> Task {
-        Task::new(1, "My task".to_owned(), ts(2026, 5, 7, 10, 0, 0))
+        Task::new(
+            1,
+            1,
+            TaskKind::Execute,
+            "My task".to_owned(),
+            ts(2026, 5, 7, 10, 0, 0),
+        )
     }
 
     fn full_task() -> Task {
         Task {
             id: TaskId::from_seq(2),
             seq: 2,
+            goal_id: 1,
+            kind: TaskKind::Execute,
             title: "Full task".to_owned(),
             status: TaskStatus::Complete,
             depends_on: vec![],

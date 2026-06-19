@@ -2,14 +2,20 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 
-use crate::domain::{validate_title, Event, EventMetadata, EventType, Task, TaskId, TaskStatus};
+use crate::domain::{
+    validate_title, Event, EventMetadata, EventType, Goal, GoalStatus, Task, TaskId, TaskKind,
+    TaskStatus,
+};
 use crate::repository::{LoopError, TaskRepository};
 
-const LATEST_VERSION: i32 = 1;
+const SKILL_TEMPLATE: &str = include_str!("../templates/SKILL.md");
 
-const MIGRATIONS: &[(i32, &str)] = &[(
-    1,
-    "CREATE TABLE tasks (
+const LATEST_VERSION: i32 = 2;
+
+const MIGRATIONS: &[(i32, &str)] = &[
+    (
+        1,
+        "CREATE TABLE tasks (
         id                  TEXT    NOT NULL PRIMARY KEY,
         seq                 INTEGER NOT NULL UNIQUE,
         title               TEXT    NOT NULL,
@@ -43,7 +49,26 @@ const MIGRATIONS: &[(i32, &str)] = &[(
     );
     CREATE INDEX idx_tasks_status ON tasks(status);
     CREATE INDEX idx_events_task_id ON events(task_id);",
-)];
+    ),
+    (
+        2,
+        "CREATE TABLE goals (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        title       TEXT    NOT NULL,
+        plan_md     TEXT    NOT NULL DEFAULT '',
+        created_at  TEXT    NOT NULL,
+        status      TEXT    NOT NULL DEFAULT 'active'
+                        CHECK(status IN ('active','complete','archived'))
+    );
+    INSERT INTO goals (id, title, plan_md, created_at, status)
+        VALUES (1, 'Initial', '', datetime('now'), 'active');
+    ALTER TABLE tasks ADD COLUMN goal_id INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'execute'
+        CHECK(kind IN ('plan','execute'));
+    INSERT OR REPLACE INTO config (key, value) VALUES ('active_goal_id', '1');
+    CREATE INDEX idx_tasks_goal_id ON tasks(goal_id);",
+    ),
+];
 
 pub struct SqliteRepository {
     loop_dir: PathBuf,
@@ -61,7 +86,18 @@ impl SqliteRepository {
         if !self.db_path.exists() {
             return Err(LoopError::NotInitialized);
         }
-        Connection::open(&self.db_path).map_err(|e| LoopError::Io(e.to_string()))
+        let mut conn = Connection::open(&self.db_path).map_err(|e| LoopError::Io(e.to_string()))?;
+        Self::apply_migrations(&mut conn)?;
+        self.ensure_runtime_files()?;
+        Ok(conn)
+    }
+
+    fn ensure_runtime_files(&self) -> Result<(), LoopError> {
+        let skill_path = self.loop_dir.join("SKILL.md");
+        if !skill_path.exists() {
+            std::fs::write(skill_path, SKILL_TEMPLATE).map_err(|e| LoopError::Io(e.to_string()))?;
+        }
+        Ok(())
     }
 
     // Returns true if any migrations were applied, false if already up to date.
@@ -88,6 +124,124 @@ impl SqliteRepository {
         }
         Ok(true)
     }
+
+    fn active_goal_id(&self, conn: &Connection) -> Result<u64, LoopError> {
+        let value: String = conn
+            .query_row(
+                "SELECT value FROM config WHERE key = 'active_goal_id'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| "1".to_owned());
+        Ok(value.parse::<u64>().unwrap_or(1))
+    }
+
+    fn insert_task(
+        &self,
+        conn: &mut Connection,
+        goal_id: u64,
+        kind: TaskKind,
+        title: &str,
+        description_md: &str,
+        acceptance_md: &str,
+    ) -> Result<Task, LoopError> {
+        validate_title(title).map_err(|e| LoopError::Io(e.to_string()))?;
+        let now = Utc::now();
+        let now_str = format_ts(now);
+
+        let tx = conn
+            .transaction()
+            .map_err(|e| LoopError::Io(e.to_string()))?;
+
+        let max_seq: i64 = tx
+            .query_row("SELECT COALESCE(MAX(seq), 0) FROM tasks", [], |row| {
+                row.get(0)
+            })
+            .map_err(|e| LoopError::Io(e.to_string()))?;
+
+        let next_seq = (max_seq + 1) as u32;
+        let id = TaskId::from_seq(next_seq);
+
+        tx.execute(
+            "INSERT INTO tasks (id, seq, goal_id, kind, title, status, depends_on, \
+             description_md, acceptance_md, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, 'pending', '[]', ?6, ?7, ?8)",
+            params![
+                id.as_str(),
+                next_seq as i64,
+                goal_id as i64,
+                kind.as_str(),
+                title,
+                description_md,
+                acceptance_md,
+                &now_str,
+            ],
+        )
+        .map_err(|e| LoopError::Io(e.to_string()))?;
+
+        tx.execute(
+            "INSERT INTO events (task_id, event_type, timestamp, metadata_json) \
+             VALUES (?1, 'created', ?2, ?3)",
+            params![id.as_str(), &now_str, "{}"],
+        )
+        .map_err(|e| LoopError::Io(e.to_string()))?;
+
+        tx.commit().map_err(|e| LoopError::Io(e.to_string()))?;
+
+        Ok(Task {
+            id,
+            seq: next_seq,
+            goal_id,
+            kind,
+            title: title.to_owned(),
+            status: TaskStatus::Pending,
+            depends_on: vec![],
+            description_md: description_md.to_owned(),
+            context_md: String::new(),
+            acceptance_md: acceptance_md.to_owned(),
+            completion_notes_md: String::new(),
+            created_at: now,
+            started_at: None,
+            completed_at: None,
+            duration_seconds: None,
+            input_tokens: None,
+            output_tokens: None,
+            model: None,
+            commit_sha: None,
+        })
+    }
+
+    fn query_tasks(&self, conn: &Connection, goal_id: Option<i64>) -> Result<Vec<Task>, LoopError> {
+        let (sql, param): (&str, Option<i64>) = match goal_id {
+            Some(id) => (
+                "SELECT id, seq, goal_id, kind, title, status, depends_on, description_md, \
+                 context_md, acceptance_md, completion_notes_md, created_at, started_at, \
+                 completed_at, duration_seconds, input_tokens, output_tokens, model, commit_sha \
+                 FROM tasks WHERE goal_id = ?1 ORDER BY seq ASC",
+                Some(id),
+            ),
+            None => (
+                "SELECT id, seq, goal_id, kind, title, status, depends_on, description_md, \
+                 context_md, acceptance_md, completion_notes_md, created_at, started_at, \
+                 completed_at, duration_seconds, input_tokens, output_tokens, model, commit_sha \
+                 FROM tasks ORDER BY seq ASC",
+                None,
+            ),
+        };
+
+        let mut stmt = conn.prepare(sql).map_err(|e| LoopError::Io(e.to_string()))?;
+        let mut rows = match param {
+            Some(id) => stmt.query(params![id]),
+            None => stmt.query([]),
+        }
+        .map_err(|e| LoopError::Io(e.to_string()))?;
+
+        let mut tasks = Vec::new();
+        while let Some(row) = rows.next().map_err(|e| LoopError::Io(e.to_string()))? {
+            tasks.push(row_to_task(row).map_err(|e| LoopError::Io(e.to_string()))?);
+        }
+        Ok(tasks)
+    }
 }
 
 impl TaskRepository for SqliteRepository {
@@ -110,32 +264,64 @@ impl TaskRepository for SqliteRepository {
         }
 
         conn.execute_batch(
-            "INSERT OR IGNORE INTO config (key, value) VALUES ('schema_version_tag', 'v1');
+            "INSERT OR IGNORE INTO config (key, value) VALUES ('schema_version_tag', 'v2');
              INSERT OR IGNORE INTO config (key, value) VALUES ('project_name', '');",
         )
         .map_err(|e| LoopError::Io(e.to_string()))?;
-
-        let plan_path = self.loop_dir.join("plan.md");
-        if !plan_path.exists() {
-            std::fs::write(&plan_path, "# Plan\n\n<!-- Add your plan here -->\n")
-                .map_err(|e| LoopError::Io(e.to_string()))?;
-        }
 
         let agent_path = self.loop_dir.join("agent-project.md");
         if !agent_path.exists() {
             std::fs::write(
                 &agent_path,
-                "# Project Context\n\n<!-- Add project context for agents -->\n",
+                "# Project Context\n\n<!-- Optional: project-specific notes for agents -->\n",
             )
             .map_err(|e| LoopError::Io(e.to_string()))?;
+        }
+
+        let skill_path = self.loop_dir.join("SKILL.md");
+        if !skill_path.exists() {
+            std::fs::write(skill_path, SKILL_TEMPLATE).map_err(|e| LoopError::Io(e.to_string()))?;
         }
 
         Ok(())
     }
 
     fn add_task(&self, title: &str) -> Result<Task, LoopError> {
-        validate_title(title).map_err(|e| LoopError::Io(e.to_string()))?;
+        let mut conn = self.open()?;
+        let goal_id = self.active_goal_id(&conn)?;
+        self.insert_task(
+            &mut conn,
+            goal_id,
+            TaskKind::Execute,
+            title,
+            "",
+            "",
+        )
+    }
 
+    fn add_planning_task(&self, title: &str, plan_md: &str) -> Result<Task, LoopError> {
+        let mut conn = self.open()?;
+        let goal_id = self.active_goal_id(&conn)?;
+        let acceptance = "Use `bp add \"<title>\"` for each executable task. \
+                          Split work for fresh context windows. \
+                          Run `bp complete` when the queue is ready.";
+        self.insert_task(
+            &mut conn,
+            goal_id,
+            TaskKind::Plan,
+            title,
+            plan_md,
+            acceptance,
+        )
+    }
+
+    fn list_active_goal_tasks(&self) -> Result<Vec<Task>, LoopError> {
+        let conn = self.open()?;
+        let goal_id = self.active_goal_id(&conn)? as i64;
+        self.query_tasks(&conn, Some(goal_id))
+    }
+
+    fn create_goal(&self, title: &str, plan_md: &str) -> Result<Goal, LoopError> {
         let mut conn = self.open()?;
         let now = Utc::now();
         let now_str = format_ts(now);
@@ -144,58 +330,87 @@ impl TaskRepository for SqliteRepository {
             .transaction()
             .map_err(|e| LoopError::Io(e.to_string()))?;
 
-        let max_seq: i64 = tx
-            .query_row("SELECT COALESCE(MAX(seq), 0) FROM tasks", [], |row| {
-                row.get(0)
-            })
-            .map_err(|e| LoopError::Io(e.to_string()))?;
-
-        let next_seq = (max_seq + 1) as u32;
-        let id = TaskId::from_seq(next_seq);
-
         tx.execute(
-            "INSERT INTO tasks (id, seq, title, status, depends_on, created_at) \
-             VALUES (?1, ?2, ?3, 'pending', '[]', ?4)",
-            params![id.as_str(), next_seq as i64, title, &now_str],
+            "UPDATE goals SET status = 'archived' WHERE status = 'active'",
+            [],
         )
         .map_err(|e| LoopError::Io(e.to_string()))?;
 
         tx.execute(
-            "INSERT INTO events (task_id, event_type, timestamp, metadata_json) \
-             VALUES (?1, 'created', ?2, ?3)",
-            params![id.as_str(), &now_str, "{}"],
+            "INSERT INTO goals (title, plan_md, created_at, status) VALUES (?1, ?2, ?3, 'active')",
+            params![title, plan_md, &now_str],
+        )
+        .map_err(|e| LoopError::Io(e.to_string()))?;
+
+        let goal_id: i64 = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('active_goal_id', ?1)",
+            params![goal_id.to_string()],
         )
         .map_err(|e| LoopError::Io(e.to_string()))?;
 
         tx.commit().map_err(|e| LoopError::Io(e.to_string()))?;
 
-        Ok(Task::new(next_seq, title.to_owned(), now))
+        Ok(Goal {
+            id: goal_id as u64,
+            title: title.to_owned(),
+            plan_md: plan_md.to_owned(),
+            created_at: now,
+            status: GoalStatus::Active,
+        })
+    }
+
+    fn list_goals(&self) -> Result<Vec<Goal>, LoopError> {
+        let conn = self.open()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, title, plan_md, created_at, status FROM goals ORDER BY id ASC",
+            )
+            .map_err(|e| LoopError::Io(e.to_string()))?;
+        let mut rows = stmt.query([]).map_err(|e| LoopError::Io(e.to_string()))?;
+        let mut goals = Vec::new();
+        while let Some(row) = rows.next().map_err(|e| LoopError::Io(e.to_string()))? {
+            goals.push(row_to_goal(row).map_err(|e| LoopError::Io(e.to_string()))?);
+        }
+        Ok(goals)
+    }
+
+    fn get_active_goal(&self) -> Result<Goal, LoopError> {
+        let conn = self.open()?;
+        let goal_id = self.active_goal_id(&conn)? as i64;
+        conn.query_row(
+            "SELECT id, title, plan_md, created_at, status FROM goals WHERE id = ?1",
+            params![goal_id],
+            row_to_goal,
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => LoopError::Io("no active goal".to_owned()),
+            e => LoopError::Io(e.to_string()),
+        })
+    }
+
+    fn read_skill(&self) -> Result<String, LoopError> {
+        if !self.db_path.exists() {
+            return Err(LoopError::NotInitialized);
+        }
+        let path = self.loop_dir.join("SKILL.md");
+        std::fs::read_to_string(&path).map_err(|e| LoopError::Io(e.to_string()))
+    }
+
+    fn skill_path(&self) -> String {
+        self.loop_dir.join("SKILL.md").display().to_string()
     }
 
     fn list_tasks(&self) -> Result<Vec<Task>, LoopError> {
         let conn = self.open()?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, seq, title, status, depends_on, description_md, context_md, \
-                 acceptance_md, completion_notes_md, created_at, started_at, completed_at, \
-                 duration_seconds, input_tokens, output_tokens, model, commit_sha \
-                 FROM tasks ORDER BY seq ASC",
-            )
-            .map_err(|e| LoopError::Io(e.to_string()))?;
-
-        let mut rows = stmt.query([]).map_err(|e| LoopError::Io(e.to_string()))?;
-        let mut tasks = Vec::new();
-        while let Some(row) = rows.next().map_err(|e| LoopError::Io(e.to_string()))? {
-            tasks.push(row_to_task(row).map_err(|e| LoopError::Io(e.to_string()))?);
-        }
-        Ok(tasks)
+        self.query_tasks(&conn, None)
     }
 
     fn get_task(&self, id: &str) -> Result<Task, LoopError> {
         let task_id = TaskId::parse(id).map_err(|_| LoopError::TaskNotFound(id.to_owned()))?;
         let conn = self.open()?;
         conn.query_row(
-            "SELECT id, seq, title, status, depends_on, description_md, context_md, \
+            "SELECT id, seq, goal_id, kind, title, status, depends_on, description_md, context_md, \
              acceptance_md, completion_notes_md, created_at, started_at, completed_at, \
              duration_seconds, input_tokens, output_tokens, model, commit_sha \
              FROM tasks WHERE id = ?1",
@@ -267,11 +482,7 @@ impl TaskRepository for SqliteRepository {
     }
 
     fn read_plan(&self) -> Result<String, LoopError> {
-        if !self.db_path.exists() {
-            return Err(LoopError::NotInitialized);
-        }
-        let plan_path = self.loop_dir.join("plan.md");
-        std::fs::read_to_string(&plan_path).map_err(|e| LoopError::Io(e.to_string()))
+        self.get_active_goal().map(|g| g.plan_md)
     }
 
     fn read_agent_project(&self) -> Result<String, LoopError> {
@@ -361,9 +572,28 @@ fn row_to_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<Event> {
     })
 }
 
+fn row_to_goal(row: &rusqlite::Row<'_>) -> rusqlite::Result<Goal> {
+    let id: i64 = row.get("id")?;
+    let title: String = row.get("title")?;
+    let plan_md: String = row.get("plan_md")?;
+    let created_at_str: String = row.get("created_at")?;
+    let status_str: String = row.get("status")?;
+    let status = GoalStatus::parse(&status_str)
+        .map_err(|e| rusqlite::Error::InvalidColumnName(e.to_string()))?;
+    Ok(Goal {
+        id: id as u64,
+        title,
+        plan_md,
+        created_at: parse_ts(&created_at_str),
+        status,
+    })
+}
+
 fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     let id_str: String = row.get("id")?;
     let seq: i64 = row.get("seq")?;
+    let goal_id: i64 = row.get("goal_id")?;
+    let kind_str: String = row.get("kind")?;
     let title: String = row.get("title")?;
     let status_str: String = row.get("status")?;
     let depends_on_json: String = row.get("depends_on")?;
@@ -382,6 +612,8 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
 
     let id =
         TaskId::parse(&id_str).map_err(|e| rusqlite::Error::InvalidColumnName(e.to_string()))?;
+    let kind = TaskKind::parse(&kind_str)
+        .map_err(|e| rusqlite::Error::InvalidColumnName(e.to_string()))?;
     let status = TaskStatus::parse(&status_str)
         .map_err(|e| rusqlite::Error::InvalidColumnName(e.to_string()))?;
     let depends_on = parse_depends_on(&depends_on_json);
@@ -392,6 +624,8 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     Ok(Task {
         id,
         seq: seq as u32,
+        goal_id: goal_id as u64,
+        kind,
         title,
         status,
         depends_on,
@@ -445,7 +679,7 @@ mod tests {
         let (repo, root) = temp_repo();
         repo.initialize().unwrap();
         assert!(root.join(".loop").join("loop.db").exists());
-        assert!(root.join(".loop").join("plan.md").exists());
+        assert!(root.join(".loop").join("SKILL.md").exists());
         assert!(root.join(".loop").join("agent-project.md").exists());
     }
 
@@ -458,20 +692,19 @@ mod tests {
     }
 
     #[test]
-    fn initialize_does_not_overwrite_existing_plan() {
+    fn initialize_does_not_overwrite_existing_skill() {
         let (repo, root) = temp_repo();
         repo.initialize().unwrap();
-        let plan_path = root.join(".loop").join("plan.md");
-        std::fs::write(&plan_path, "# My custom plan\n").unwrap();
-        // Re-initializing from a fresh repo object on the same dir should give AlreadyInitialized
+        let skill_path = root.join(".loop").join("SKILL.md");
+        std::fs::write(&skill_path, "# Custom skill\n").unwrap();
         let repo2 = SqliteRepository::new(&root);
         assert!(matches!(
             repo2.initialize(),
             Err(LoopError::AlreadyInitialized)
         ));
         assert_eq!(
-            std::fs::read_to_string(&plan_path).unwrap(),
-            "# My custom plan\n"
+            std::fs::read_to_string(&skill_path).unwrap(),
+            "# Custom skill\n"
         );
     }
 
@@ -623,7 +856,7 @@ mod tests {
     #[test]
     fn update_task_not_found_fails() {
         let (repo, _root) = init_repo();
-        let task = Task::new(99, "ghost".to_owned(), Utc::now());
+        let task = Task::new(99, 1, TaskKind::Execute, "ghost".to_owned(), Utc::now());
         assert!(matches!(
             repo.update_task(task),
             Err(LoopError::TaskNotFound(_))
@@ -631,10 +864,10 @@ mod tests {
     }
 
     #[test]
-    fn read_plan_returns_content() {
-        let (repo, root) = init_repo();
-        let plan_path = root.join(".loop").join("plan.md");
-        std::fs::write(&plan_path, "# My Plan\n\nDo great things.\n").unwrap();
+    fn read_plan_returns_active_goal_plan() {
+        let (repo, _root) = init_repo();
+        repo.create_goal("Test plan", "# My Plan\n\nDo great things.\n")
+            .unwrap();
         let content = repo.read_plan().unwrap();
         assert!(content.contains("My Plan"));
         assert!(content.contains("Do great things."));
@@ -719,12 +952,12 @@ mod tests {
 
         let table_count: i32 = conn
             .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('tasks','events','config')",
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('tasks','events','config','goals')",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(table_count, 3);
+        assert_eq!(table_count, 4);
 
         assert!(!SqliteRepository::apply_migrations(&mut conn).unwrap());
         drop(conn);

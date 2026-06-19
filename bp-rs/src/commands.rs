@@ -28,12 +28,14 @@ pub fn help() -> i32 {
            status                List all tasks with ID, status, and title\n\
            show <id>             Print full task detail\n\
            summary [--json] [--since <id>] [--last-run]  Run completion report\n\
-           read plan|current|<id>  Print planning or task text for agent use\n\
-           run [--model <id>]    Execute pending tasks sequentially via agent sessions\n\
+           read plan|current|<id>  Print goal plan or task text for agent use\n\
+           run [plan.md] [--model <id>] [--backend cursor|claude]  Run active goal (optionally start from plan)\n\
+           goal new                Start a fresh goal (archives the previous one)\n\
+           goal list               List goals in this project\n\
            complete [--notes \"\"] [--if-running] Mark the current task complete\n\
            reset <id>            Return a task to pending and clear metrics\n\
          \n\
-         Run `bp <command> -h` for command-specific help."
+         Run `bp -h` for usage."
     );
     0
 }
@@ -78,12 +80,26 @@ pub fn add(repo: &dyn TaskRepository, title: &str) -> i32 {
 
 pub fn status(repo: &dyn TaskRepository) -> i32 {
     let project_root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
-    match repo.list_tasks() {
+    let goal = match repo.get_active_goal() {
+        Ok(g) => g,
+        Err(LoopError::NotInitialized) => {
+            eprintln!("error: bp not initialized — run `bp init` first");
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+
+    match repo.list_active_goal_tasks() {
         Ok(tasks) if tasks.is_empty() => {
-            println!("No tasks. Run `bp add \"<title>\"` to create one.");
+            println!("Goal {} (active): {}", goal.id, goal.title);
+            println!("No tasks. Run `bp run plan.md` or `bp add \"<title>\"`.");
             0
         }
         Ok(tasks) => {
+            println!("Goal {} (active): {}", goal.id, goal.title);
             println!("{:<5} {:<10} {}", "ID", "STATUS", "TITLE");
             for task in &tasks {
                 let mut line = format!(
@@ -169,7 +185,7 @@ pub fn read_plan(repo: &dyn TaskRepository) -> i32 {
 }
 
 pub fn read_current(repo: &dyn TaskRepository) -> i32 {
-    let tasks = match repo.list_tasks() {
+    let tasks = match repo.list_active_goal_tasks() {
         Ok(t) => t,
         Err(LoopError::NotInitialized) => {
             eprintln!("error: bp not initialized — run `bp init` first");
@@ -217,16 +233,126 @@ pub fn read_task(repo: &dyn TaskRepository, id: &str) -> i32 {
     }
 }
 
-pub fn run(repo: &dyn TaskRepository, project_root: &Path, agent_model: Option<&str>) -> i32 {
-    let model = agent_model
-        .map(str::to_owned)
-        .or_else(|| std::env::var("BP_AGENT_MODEL").ok().filter(|s| !s.trim().is_empty()));
-    let config = RunConfig { agent_model: model };
+pub fn run(
+    repo: &dyn TaskRepository,
+    project_root: &Path,
+    plan_file: Option<&str>,
+    agent_model: Option<&str>,
+    backend: Option<&str>,
+) -> i32 {
+    if let Some(path) = plan_file {
+        if let Err(code) = start_goal_from_plan(repo, project_root, path) {
+            return code;
+        }
+    }
+
+    let config = RunConfig {
+        agent_model: agent_model.map(str::to_owned),
+        backend: backend.map(str::to_owned),
+    };
     crate::orchestrator::execute_run(repo, project_root, &config)
 }
 
+fn start_goal_from_plan(repo: &dyn TaskRepository, project_root: &Path, plan_path: &str) -> Result<(), i32> {
+    let full_path = project_root.join(plan_path);
+    let plan_md = std::fs::read_to_string(&full_path).map_err(|e| {
+        eprintln!("error: could not read plan file '{plan_path}' — {e}");
+        1
+    })?;
+
+    let title = Path::new(plan_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("plan")
+        .to_owned();
+
+    let goal = match repo.create_goal(&title, &plan_md) {
+        Ok(g) => g,
+        Err(LoopError::NotInitialized) => {
+            eprintln!("error: bp not initialized — run `bp init` first");
+            return Err(1);
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return Err(1);
+        }
+    };
+
+    let planning_title = format!("Plan: decompose into tasks ({title})");
+    match repo.add_planning_task(&planning_title, &plan_md) {
+        Ok(task) => {
+            println!(
+                "Started goal {} from '{plan_path}' — planning task {} queued.",
+                goal.id, task.id
+            );
+            Ok(())
+        }
+        Err(LoopError::NotInitialized) => {
+            eprintln!("error: bp not initialized — run `bp init` first");
+            Err(1)
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            Err(1)
+        }
+    }
+}
+
+pub fn goal_new(repo: &dyn TaskRepository) -> i32 {
+    match repo.create_goal("Untitled goal", "") {
+        Ok(goal) => {
+            println!("Started goal {} (active). Add tasks with `bp add` or `bp run plan.md`.", goal.id);
+            0
+        }
+        Err(LoopError::NotInitialized) => {
+            eprintln!("error: bp not initialized — run `bp init` first");
+            1
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            1
+        }
+    }
+}
+
+pub fn goal_list(repo: &dyn TaskRepository) -> i32 {
+    let active = match repo.get_active_goal() {
+        Ok(g) => g.id,
+        Err(LoopError::NotInitialized) => {
+            eprintln!("error: bp not initialized — run `bp init` first");
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+
+    match repo.list_goals() {
+        Ok(goals) if goals.is_empty() => {
+            println!("No goals.");
+            0
+        }
+        Ok(goals) => {
+            println!("{:<5} {:<10} {}", "ID", "STATUS", "TITLE");
+            for goal in goals {
+                let marker = if goal.id == active { " *" } else { "" };
+                println!(
+                    "{:<5} {:<10} {}{}",
+                    goal.id, goal.status, goal.title, marker
+                );
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            1
+        }
+    }
+}
+
 pub fn complete(repo: &dyn TaskRepository, notes: Option<&str>, if_running: bool) -> i32 {
-    let tasks = match repo.list_tasks() {
+    let tasks = match repo.list_active_goal_tasks() {
         Ok(t) => t,
         Err(LoopError::NotInitialized) => {
             eprintln!("error: bp not initialized — run `bp init` first");
@@ -301,7 +427,7 @@ pub fn summary(
         },
     };
 
-    let tasks = match repo.list_tasks() {
+    let tasks = match repo.list_active_goal_tasks() {
         Ok(t) => t,
         Err(LoopError::NotInitialized) => {
             eprintln!("error: bp not initialized — run `bp init` first");
@@ -371,26 +497,23 @@ pub fn reset(repo: &dyn TaskRepository, id: &str) -> i32 {
     }
 }
 
-/// Runtime metadata optionally supplied via environment (typically by the agent session).
-/// Reads `BP_COMPLETE_*` first, then `LOOP_COMPLETE_*` for backward compatibility.
+/// Runtime metadata optionally supplied by the agent subprocess wrapper (not user-facing).
 fn completion_metrics_from_env() -> (Option<i64>, Option<i64>, Option<String>, Option<String>) {
-    let input_tokens = env_opt_i64("BP_COMPLETE_INPUT_TOKENS", "LOOP_COMPLETE_INPUT_TOKENS");
-    let output_tokens = env_opt_i64("BP_COMPLETE_OUTPUT_TOKENS", "LOOP_COMPLETE_OUTPUT_TOKENS");
-    let model = env_opt_string("BP_COMPLETE_MODEL", "LOOP_COMPLETE_MODEL");
-    let commit_sha = env_opt_string("BP_COMPLETE_COMMIT_SHA", "LOOP_COMPLETE_COMMIT_SHA");
+    let input_tokens = env_opt_i64("BP_COMPLETE_INPUT_TOKENS");
+    let output_tokens = env_opt_i64("BP_COMPLETE_OUTPUT_TOKENS");
+    let model = env_opt_string("BP_COMPLETE_MODEL");
+    let commit_sha = env_opt_string("BP_COMPLETE_COMMIT_SHA");
     (input_tokens, output_tokens, model, commit_sha)
 }
 
-fn env_opt_i64(primary: &str, legacy: &str) -> Option<i64> {
-    std::env::var(primary)
-        .or_else(|_| std::env::var(legacy))
+fn env_opt_i64(key: &str) -> Option<i64> {
+    std::env::var(key)
         .ok()
         .and_then(|s| s.trim().parse::<i64>().ok())
 }
 
-fn env_opt_string(primary: &str, legacy: &str) -> Option<String> {
-    std::env::var(primary)
-        .or_else(|_| std::env::var(legacy))
+fn env_opt_string(key: &str) -> Option<String> {
+    std::env::var(key)
         .ok()
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())

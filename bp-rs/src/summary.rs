@@ -277,6 +277,7 @@ pub fn summary_headline(summary: &RunSummary) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::TaskKind;
     use chrono::TimeZone;
 
     fn ts(y: i32, mo: u32, d: u32, h: u32, min: u32, s: u32) -> DateTime<Utc> {
@@ -290,7 +291,13 @@ mod tests {
         completed: Option<DateTime<Utc>>,
         duration: Option<i64>,
     ) -> Task {
-        let mut t = Task::new(seq, format!("task {seq}"), ts(2026, 6, 1, 0, 0, 0));
+        let mut t = Task::new(
+            seq,
+            1,
+            TaskKind::Execute,
+            format!("task {seq}"),
+            ts(2026, 6, 1, 0, 0, 0),
+        );
         t.status = status;
         t.started_at = started;
         t.completed_at = completed;
@@ -358,7 +365,7 @@ mod tests {
 
     #[test]
     fn commit_line_from_sha_and_notes() {
-        let mut t = Task::new(1, "x".to_owned(), ts(2026, 1, 1, 0, 0, 0));
+        let mut t = Task::new(1, 1, TaskKind::Execute, "x".to_owned(), ts(2026, 1, 1, 0, 0, 0));
         t.commit_sha = Some("abc1234".to_owned());
         t.completion_notes_md = "Commit: abc1234 decompose build plan into bp queue".to_owned();
         assert_eq!(
@@ -369,14 +376,14 @@ mod tests {
 
     #[test]
     fn commit_line_parsed_from_notes_only() {
-        let mut t = Task::new(1, "x".to_owned(), ts(2026, 1, 1, 0, 0, 0));
+        let mut t = Task::new(1, 1, TaskKind::Execute, "x".to_owned(), ts(2026, 1, 1, 0, 0, 0));
         t.completion_notes_md = "Commit: f6d751c scaffold Phoenix app".to_owned();
         assert_eq!(task_commit_line(&t), "f6d751c scaffold Phoenix app");
     }
 
     #[test]
     fn commit_line_dash_when_missing() {
-        let t = Task::new(1, "x".to_owned(), ts(2026, 1, 1, 0, 0, 0));
+        let t = Task::new(1, 1, TaskKind::Execute, "x".to_owned(), ts(2026, 1, 1, 0, 0, 0));
         assert_eq!(task_commit_line(&t), "—");
     }
 

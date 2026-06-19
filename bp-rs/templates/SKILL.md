@@ -59,7 +59,6 @@ bp status             # active goal + task queue
 bp show <id>          # human-readable task detail
 bp reset <id>         # retry a stuck task
 bp goal list          # all goals in this project
-bp run --model composer-2.5 --backend cursor
 ```
 
 ## Task quality checklist

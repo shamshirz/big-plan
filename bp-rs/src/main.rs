@@ -3,6 +3,7 @@ pub mod cli;
 pub mod commands;
 pub mod domain;
 pub mod orchestrator;
+pub mod prompts;
 pub mod render;
 pub mod repository;
 pub mod run_lock;
@@ -76,7 +77,19 @@ fn dispatch(cmd: Command, repo: &dyn TaskRepository, cwd: &std::path::Path) -> i
         Command::Read {
             target: ReadTarget::Task(id),
         } => commands::read_task(repo, &id),
-        Command::Run { agent_model } => commands::run(repo, cwd, agent_model.as_deref()),
+        Command::Run {
+            plan_file,
+            agent_model,
+            backend,
+        } => commands::run(
+            repo,
+            cwd,
+            plan_file.as_deref(),
+            agent_model.as_deref(),
+            backend.as_deref(),
+        ),
+        Command::GoalNew => commands::goal_new(repo),
+        Command::GoalList => commands::goal_list(repo),
         Command::Complete { notes, if_running } => {
             commands::complete(repo, notes.as_deref(), if_running)
         }
