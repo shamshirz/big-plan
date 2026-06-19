@@ -23,7 +23,7 @@ Planning tasks (`bp run plan.md`) use plan-decomposition guidance instead of nor
 ## How to work here
 
 1. Run `bp init` once in this repo root (if not already).
-2. Start a goal: `bp run simplification-plan.md` or `bp goal new` + `bp add`.
+2. Start a goal: `bp run plan.md` or `bp goal new` + `bp add`.
 3. Execute: `bp run [--model <id>]` (Cursor default).
 4. Inspect: `bp status`, `bp show <id>`, `bp summary`.
 
