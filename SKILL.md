@@ -55,12 +55,40 @@ When decomposing a plan into tasks:
 ## Human commands
 
 ```bash
-bp status             # active goal + task queue
+bp status             # live goal dashboard (see below)
 bp show <id>          # human-readable task detail
 bp reset <id>         # retry a stuck task
 bp goal list          # all goals in this project
 bp run --model composer-2.5 --backend cursor
 ```
+
+## Checking in with `bp status`
+
+Run `bp status` to see where the active goal stands — progress bar, digest, and per-task metrics in one glance (no TUI, no browser).
+
+Typical output:
+
+```
+Goal 1 (active): My feature
+
+Progress: 2/4 complete · 1 running · 1 pending          [███████░░░░░░░] 50%
+
+Digest: Run in progress · started 12m ago · agent time 9m · now on 003 "Wire API" (3m) · Last finished: 002 at 2026-06-19 14:32 UTC · Next: 004 "Docs"
+
+  ID    STATUS     TIME     COMMIT      TITLE
+  ✓ 001 complete 4m       abc1234     Scaffold module
+  ✓ 002 complete 5m       def5678     Add persistence
+  ▶ 003 running  3m       —           Wire API
+  · 004 pending  —        —           Docs
+
+Active bp run: task 003 (pid 12345)
+```
+
+- **Progress** — counts plus a bar (`complete / total`)
+- **Digest** — run state, wall-clock and agent time, current task, last finished (with commit), next pending, slowest completed
+- **Task table** — `✓` complete, `▶` running, `·` pending, `✗` failed; per-task elapsed time and commit SHA
+
+Use `bp summary` for the full retrospective (tokens, `--last-run`, `--since`).
 
 ## Task quality checklist
 

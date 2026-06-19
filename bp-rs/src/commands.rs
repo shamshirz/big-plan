@@ -9,6 +9,7 @@ use crate::orchestrator::RunConfig;
 use crate::render::{
     fmt_duration_human, fmt_tokens_compact, fmt_ts_summary, render_task_detail, render_task_markdown,
 };
+use crate::status_view::{render_status, StatusContext};
 use crate::repository::{LoopError, TaskRepository};
 use crate::run_lock;
 use crate::summary::{
@@ -25,7 +26,7 @@ pub fn help() -> i32 {
          Commands:\n\
            init                  Initialize .loop/ state in the current directory\n\
            add \"<title>\"         Add a new pending task\n\
-           status                List all tasks with ID, status, and title\n\
+           status                Goal progress, digest narrative, and task queue\n\
            show <id>             Print full task detail\n\
            summary [--json] [--since <id>] [--last-run]  Run completion report\n\
            read plan|current|<id>  Print goal plan or task text for agent use\n\
@@ -92,54 +93,48 @@ pub fn status(repo: &dyn TaskRepository) -> i32 {
         }
     };
 
-    match repo.list_active_goal_tasks() {
-        Ok(tasks) if tasks.is_empty() => {
-            println!("Goal {} (active): {}", goal.id, goal.title);
-            println!("No tasks. Run `bp run plan.md` or `bp add \"<title>\"`.");
-            0
-        }
-        Ok(tasks) => {
-            println!("Goal {} (active): {}", goal.id, goal.title);
-            println!("{:<5} {:<10} {}", "ID", "STATUS", "TITLE");
-            for task in &tasks {
-                let mut line = format!(
-                    "{:<5} {:<10} {}",
-                    task.id,
-                    task.status,
-                    truncate(&task.title, 60)
-                );
-                if task.status == TaskStatus::Running {
-                    if let Some(started_at) = task.started_at {
-                        let elapsed = Utc::now().signed_duration_since(started_at);
-                        let mins = elapsed.num_minutes();
-                        if mins > 0 {
-                            line.push_str(&format!("  ({mins}m running)"));
-                        } else {
-                            line.push_str("  (<1m running)");
-                        }
-                    }
-                }
-                println!("{line}");
-            }
-            let running_task_id = tasks
-                .iter()
-                .find(|t| t.status == TaskStatus::Running)
-                .map(|t| t.id.as_str());
-            if let Some(activity) = run_lock::format_run_activity(&project_root, running_task_id) {
-                println!();
-                println!("{activity}");
-            }
-            0
-        }
+    let tasks = match repo.list_active_goal_tasks() {
+        Ok(t) => t,
         Err(LoopError::NotInitialized) => {
             eprintln!("error: bp not initialized — run `bp init` first");
-            1
+            return 1;
         }
         Err(e) => {
             eprintln!("error: {e}");
-            1
+            return 1;
         }
-    }
+    };
+
+    let events = match repo.list_events() {
+        Ok(e) => e,
+        Err(LoopError::NotInitialized) => {
+            eprintln!("error: bp not initialized — run `bp init` first");
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+
+    let summary = build_summary(&tasks, &SummaryFilter::default(), &events);
+    let running_task_id = tasks
+        .iter()
+        .find(|t| t.status == TaskStatus::Running)
+        .map(|t| t.id.as_str());
+    let activity = run_lock::format_run_activity(&project_root, running_task_id);
+
+    print!(
+        "{}",
+        render_status(&StatusContext {
+            goal: &goal,
+            tasks: &tasks,
+            summary: &summary,
+            activity,
+            now: None,
+        })
+    );
+    0
 }
 
 pub fn show(repo: &dyn TaskRepository, id: &str) -> i32 {
@@ -517,14 +512,6 @@ fn env_opt_string(key: &str) -> Option<String> {
         .ok()
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
-}
-
-fn truncate(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        s.to_owned()
-    } else {
-        s.chars().take(max_chars).collect()
-    }
 }
 
 fn render_summary_text(summary: &crate::summary::RunSummary) -> String {

@@ -8,6 +8,7 @@ pub mod render;
 pub mod repository;
 pub mod run_lock;
 pub mod sqlite_repo;
+pub mod status_view;
 pub mod summary;
 
 use cli::{Command, ParseError, ReadTarget};

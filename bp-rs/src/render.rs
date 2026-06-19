@@ -129,6 +129,33 @@ pub fn fmt_duration_human(seconds: i64) -> String {
     }
 }
 
+/// ASCII progress bar for task completion, e.g. `[████████░░░░░░]` for 8/14.
+///
+/// `width` is the number of block characters inside the brackets.
+/// Returns an empty string when `total == 0`.
+pub fn render_progress_bar(filled: usize, total: usize, width: usize) -> String {
+    if total == 0 {
+        return String::new();
+    }
+    let filled_width = (filled.saturating_mul(width)) / total;
+    let empty_width = width.saturating_sub(filled_width);
+    let mut out = String::with_capacity(2 + width);
+    out.push('[');
+    out.push_str(&"█".repeat(filled_width));
+    out.push_str(&"░".repeat(empty_width));
+    out.push(']');
+    out
+}
+
+/// Truncate a string to at most `max_chars` Unicode scalars.
+pub fn truncate(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        s.to_owned()
+    } else {
+        s.chars().take(max_chars).collect()
+    }
+}
+
 /// Compact token count: `1.2M`, `340k`, `999`.
 pub fn fmt_tokens_compact(n: i64) -> String {
     if n >= 1_000_000 {
@@ -347,5 +374,24 @@ mod tests {
         assert_eq!(fmt_tokens_compact(999), "999");
         assert_eq!(fmt_tokens_compact(340_000), "340k");
         assert_eq!(fmt_tokens_compact(1_200_000), "1.2M");
+    }
+
+    #[test]
+    fn render_progress_bar_examples() {
+        assert_eq!(render_progress_bar(8, 14, 14), "[████████░░░░░░]");
+        assert_eq!(render_progress_bar(0, 14, 14), "[░░░░░░░░░░░░░░]");
+        assert_eq!(render_progress_bar(14, 14, 14), "[██████████████]");
+        assert_eq!(render_progress_bar(1, 14, 14), "[█░░░░░░░░░░░░░]");
+    }
+
+    #[test]
+    fn render_progress_bar_zero_total_is_empty() {
+        assert_eq!(render_progress_bar(0, 0, 14), "");
+        assert_eq!(render_progress_bar(5, 0, 14), "");
+    }
+
+    #[test]
+    fn render_progress_bar_zero_width() {
+        assert_eq!(render_progress_bar(5, 10, 0), "[]");
     }
 }

@@ -51,12 +51,32 @@ bp run
 | `bp goal list` | List goals (`*` = active) |
 | `bp run [plan.md] [--model <id>] [--backend cursor\|claude]` | Run active goal; optional plan file starts a new goal first |
 | `bp add "<title>"` | Add a pending task to the active goal |
-| `bp status` | Active goal + task queue |
+| `bp status` | Live dashboard: progress bar, digest, and task table with time/commits |
 | `bp show <id>` | Human-readable task detail |
 | `bp read plan\|current\|<id>` | Markdown for agents |
 | `bp complete [--notes "..."] [--if-running]` | Mark the running task complete |
 | `bp reset <id>` | Return a task to pending |
 | `bp summary [--json]` | Post-run report (wall clock, tokens, commits) |
+
+## `bp status` example
+
+```
+Goal 1 (active): My feature
+
+Progress: 2/4 complete · 1 running · 1 pending          [███████░░░░░░░] 50%
+
+Digest: Run in progress · started 12m ago · agent time 9m · now on 003 "Wire API" (3m) · Last finished: 002 at 2026-06-19 14:32 UTC · Next: 004 "Docs"
+
+  ID    STATUS     TIME     COMMIT      TITLE
+  ✓ 001 complete 4m       abc1234     Scaffold module
+  ✓ 002 complete 5m       def5678     Add persistence
+  ▶ 003 running  3m       —           Wire API
+  · 004 pending  —        —           Docs
+
+Active bp run: task 003 (pid 12345)
+```
+
+Unicode markers: `✓` complete, `▶` running, `·` pending, `✗` failed. Use `bp summary` for token totals and `--last-run` / `--since` filters.
 
 ## Agent workflow
 

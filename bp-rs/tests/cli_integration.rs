@@ -138,8 +138,9 @@ fn run_completes_when_agent_shell_invokes_bp_complete() {
     let status = run_in(tmp.path(), &["status"]);
     assert!(status.status.success());
     let (listing, _) = output_utf8(&status);
-    assert!(listing.contains("001"));
-    assert!(listing.contains("complete"));
+    assert!(listing.contains("Progress: 1/1 complete"));
+    assert!(listing.contains("✓ 001 complete"));
+    assert!(listing.contains("solo"));
 }
 
 #[test]
@@ -166,7 +167,9 @@ fn run_from_plan_creates_goal_and_planning_task() {
     assert!(stdout.contains("planning task"));
     let status = run_in(tmp.path(), &["status"]);
     let (listing, _) = output_utf8(&status);
-    assert!(listing.contains("Goal"));
+    assert!(listing.contains("(active): plan"));
+    assert!(listing.contains("Progress:"));
+    assert!(listing.contains("Digest:"));
     assert!(listing.contains("Plan:"));
 }
 
@@ -268,7 +271,8 @@ fn project_local_isolation_separate_directories() {
     let (out_a, _) = output_utf8(&status_a);
     let (out_b, _) = output_utf8(&status_b);
     assert!(out_a.contains("only in A"));
-    assert!(out_b.contains("No tasks."));
+    assert!(out_b.contains("Goal 1 (active): Initial"));
+    assert!(!out_b.contains("Progress:"));
     assert!(!out_b.contains("only in A"));
 }
 
@@ -314,7 +318,9 @@ fn status_warns_when_task_running_without_active_bp_run() {
     let out = run_in(tmp.path(), &["status"]);
     assert!(out.status.success());
     let (stdout, _) = output_utf8(&out);
-    assert!(stdout.contains("running"));
+    assert!(stdout.contains("Progress: 0/1 complete · 1 running"));
+    assert!(stdout.contains("Digest: Run in progress"));
+    assert!(stdout.contains("▶ 001 running"));
     assert!(stdout.contains("no active bp run"));
     assert!(stdout.contains("bp reset 001"));
 }
@@ -364,6 +370,87 @@ fn seed_completed_task(
         ],
     )
     .expect("seed task");
+}
+
+#[test]
+fn status_shows_progress_and_digest() {
+    let tmp = TempDir::new().expect("tempdir");
+    init_project(tmp.path());
+    seed_completed_task(
+        tmp.path(),
+        "001",
+        1,
+        "2026-06-17T02:21:29Z",
+        "2026-06-17T02:23:11Z",
+        102,
+        "done",
+        None,
+        None,
+        None,
+    );
+    assert!(run_in(tmp.path(), &["add", "active"]).status.success());
+    assert!(run_in(tmp.path(), &["add", "waiting"]).status.success());
+    force_task_running(tmp.path(), "002");
+    let out = run_in(tmp.path(), &["status"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let (stdout, _) = output_utf8(&out);
+    assert!(stdout.contains("Progress: 1/3 complete · 1 running · 1 pending"));
+    assert!(stdout.contains("Digest: Run in progress"));
+    assert!(stdout.contains("now on 002"));
+    assert!(stdout.contains("Next: 003"));
+    assert!(stdout.contains("Last finished: 001"));
+    assert!(stdout.contains("ID    STATUS"));
+}
+
+#[test]
+fn status_shows_duration_and_commit() {
+    let tmp = TempDir::new().expect("tempdir");
+    init_project(tmp.path());
+    seed_completed_task(
+        tmp.path(),
+        "001",
+        1,
+        "2026-06-17T02:21:29Z",
+        "2026-06-17T02:23:11Z",
+        102,
+        "Commit: abc1234 decompose build plan into bp queue",
+        Some("abc1234"),
+        None,
+        None,
+    );
+    let out = run_in(tmp.path(), &["status"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let (stdout, _) = output_utf8(&out);
+    assert!(stdout.contains("✓ 001 complete"));
+    assert!(stdout.contains("1m 42s"));
+    assert!(stdout.contains("abc1234 decompose"));
+}
+
+#[test]
+fn status_shows_unicode_markers() {
+    let tmp = TempDir::new().expect("tempdir");
+    init_project(tmp.path());
+    seed_completed_task(
+        tmp.path(),
+        "001",
+        1,
+        "2026-06-17T02:00:00Z",
+        "2026-06-17T02:01:00Z",
+        60,
+        "ok",
+        None,
+        None,
+        None,
+    );
+    assert!(run_in(tmp.path(), &["add", "active"]).status.success());
+    assert!(run_in(tmp.path(), &["add", "waiting"]).status.success());
+    force_task_running(tmp.path(), "002");
+    let out = run_in(tmp.path(), &["status"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let (stdout, _) = output_utf8(&out);
+    assert!(stdout.contains("✓ 001"));
+    assert!(stdout.contains("▶ 002"));
+    assert!(stdout.contains("· 003"));
 }
 
 #[test]
