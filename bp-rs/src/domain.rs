@@ -396,6 +396,17 @@ pub fn transition_reset(task: Task) -> Task {
     }
 }
 
+/// Fill missing completion metrics on an already-complete task (orchestrator post-agent patch).
+pub fn merge_completion_metrics(task: Task, patch: &CompletionData) -> Task {
+    Task {
+        input_tokens: task.input_tokens.or(patch.input_tokens),
+        output_tokens: task.output_tokens.or(patch.output_tokens),
+        model: task.model.clone().or_else(|| patch.model.clone()),
+        commit_sha: task.commit_sha.clone().or_else(|| patch.commit_sha.clone()),
+        ..task
+    }
+}
+
 // --- Collection-level queries and invariants ---
 
 /// Enforces the single-running-task invariant.

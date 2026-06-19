@@ -14,6 +14,11 @@ pub enum Command {
         if_running: bool,
     },
     Reset { id: String },
+    Summary {
+        json: bool,
+        since: Option<String>,
+        last_run: bool,
+    },
 }
 
 #[derive(Debug, PartialEq)]
@@ -50,6 +55,7 @@ pub fn parse_from(args: &[String]) -> Result<Command, ParseError> {
         Some("run") => parse_run(&args[1..]),
         Some("complete") => parse_complete(&args[1..]),
         Some("reset") => parse_reset(&args[1..]),
+        Some("summary") => parse_summary(&args[1..]),
         Some(unknown) => Err(ParseError::UnknownCommand(unknown.to_owned())),
     }
 }
@@ -94,6 +100,17 @@ fn parse_reset(args: &[String]) -> Result<Command, ParseError> {
         None => Err(ParseError::MissingId { cmd: "reset" }),
         Some(id) => Ok(Command::Reset { id: id.clone() }),
     }
+}
+
+fn parse_summary(args: &[String]) -> Result<Command, ParseError> {
+    let json = args.iter().any(|a| a == "--json");
+    let last_run = args.iter().any(|a| a == "--last-run");
+    let since = extract_flag_value(args, "--since")?;
+    Ok(Command::Summary {
+        json,
+        since,
+        last_run,
+    })
 }
 
 fn extract_notes_flag(args: &[String]) -> Result<Option<String>, ParseError> {
@@ -317,6 +334,37 @@ mod tests {
         assert_eq!(
             parse_from(&args("foo")),
             Err(ParseError::UnknownCommand("foo".to_owned()))
+        );
+    }
+
+    #[test]
+    fn parse_summary_defaults() {
+        assert_eq!(
+            parse_from(&args("summary")),
+            Ok(Command::Summary {
+                json: false,
+                since: None,
+                last_run: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_summary_with_flags() {
+        let a = [
+            "summary".to_owned(),
+            "--json".to_owned(),
+            "--since".to_owned(),
+            "002".to_owned(),
+            "--last-run".to_owned(),
+        ];
+        assert_eq!(
+            parse_from(&a),
+            Ok(Command::Summary {
+                json: true,
+                since: Some("002".to_owned()),
+                last_run: true,
+            })
         );
     }
 }

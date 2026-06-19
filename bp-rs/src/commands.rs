@@ -6,9 +6,14 @@ use crate::domain::{
     current_running, transition_complete, transition_reset, CompletionData, DomainError, TaskStatus,
 };
 use crate::orchestrator::RunConfig;
-use crate::render::{render_task_detail, render_task_markdown};
+use crate::render::{
+    fmt_duration_human, fmt_tokens_compact, fmt_ts_summary, render_task_detail, render_task_markdown,
+};
 use crate::repository::{LoopError, TaskRepository};
 use crate::run_lock;
+use crate::summary::{
+    build_summary, summary_headline, task_commit_line, since_seq_from_id, SummaryFilter,
+};
 
 pub fn help() -> i32 {
     println!(
@@ -22,6 +27,7 @@ pub fn help() -> i32 {
            add \"<title>\"         Add a new pending task\n\
            status                List all tasks with ID, status, and title\n\
            show <id>             Print full task detail\n\
+           summary [--json] [--since <id>] [--last-run]  Run completion report\n\
            read plan|current|<id>  Print planning or task text for agent use\n\
            run [--model <id>]    Execute pending tasks sequentially via agent sessions\n\
            complete [--notes \"\"] [--if-running] Mark the current task complete\n\
@@ -278,6 +284,61 @@ pub fn complete(repo: &dyn TaskRepository, notes: Option<&str>, if_running: bool
     }
 }
 
+pub fn summary(
+    repo: &dyn TaskRepository,
+    json: bool,
+    since: Option<&str>,
+    last_run: bool,
+) -> i32 {
+    let since_seq = match since {
+        None => None,
+        Some(id) => match since_seq_from_id(id) {
+            Ok(seq) => Some(seq),
+            Err(e) => {
+                eprintln!("error: invalid --since task id: {e}");
+                return 1;
+            }
+        },
+    };
+
+    let tasks = match repo.list_tasks() {
+        Ok(t) => t,
+        Err(LoopError::NotInitialized) => {
+            eprintln!("error: bp not initialized — run `bp init` first");
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+
+    let events = match repo.list_events() {
+        Ok(e) => e,
+        Err(LoopError::NotInitialized) => {
+            eprintln!("error: bp not initialized — run `bp init` first");
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+
+    let filter = SummaryFilter {
+        since_seq,
+        last_run,
+    };
+    let summary = build_summary(&tasks, &filter, &events);
+
+    if json {
+        print!("{}", render_summary_json(&summary));
+    } else {
+        print!("{}", render_summary_text(&summary));
+    }
+    0
+}
+
 pub fn reset(repo: &dyn TaskRepository, id: &str) -> i32 {
     let task = match repo.get_task(id) {
         Ok(t) => t,
@@ -341,4 +402,135 @@ fn truncate(s: &str, max_chars: usize) -> String {
     } else {
         s.chars().take(max_chars).collect()
     }
+}
+
+fn render_summary_text(summary: &crate::summary::RunSummary) -> String {
+    let mut out = String::new();
+    out.push_str(&summary_headline(summary));
+    out.push('\n');
+
+    if let (Some(start), Some(end)) = (summary.wall_start, summary.wall_end) {
+        let wall = summary
+            .wall_seconds
+            .map(fmt_duration_human)
+            .unwrap_or_else(|| "—".to_owned());
+        out.push_str(&format!(
+            "Wall clock:  {} → {} UTC ({wall})\n",
+            fmt_ts_summary(start),
+            fmt_ts_summary(end)
+        ));
+    } else {
+        out.push_str("Wall clock:  —\n");
+    }
+
+    let agent = fmt_duration_human(summary.agent_seconds);
+    let overhead = summary
+        .overhead_seconds
+        .map(|o| format!(" · overhead {o}s"))
+        .unwrap_or_default();
+    out.push_str(&format!(
+        "Agent time:  {agent} ({}s){overhead}\n",
+        summary.agent_seconds
+    ));
+
+    if summary.any_tokens_recorded {
+        let tin = summary
+            .total_input_tokens
+            .map(fmt_tokens_compact)
+            .unwrap_or_else(|| "0".to_owned());
+        let tout = summary
+            .total_output_tokens
+            .map(fmt_tokens_compact)
+            .unwrap_or_else(|| "0".to_owned());
+        out.push_str(&format!("Tokens:      {tin} in / {tout} out\n"));
+    } else {
+        out.push_str("Tokens:      — (not recorded)\n");
+    }
+
+    if let Some(model) = &summary.model_label {
+        out.push_str(&format!("Model:       {model}\n"));
+    }
+
+    out.push('\n');
+    out.push_str(&format!(
+        "{:<5} {:<10} {:<8} {:<11} {}\n",
+        "ID", "STATUS", "TIME", "TOKENS", "COMMIT"
+    ));
+
+    for task in &summary.tasks {
+        let time = task
+            .duration_seconds
+            .map(fmt_duration_human)
+            .unwrap_or_else(|| "—".to_owned());
+        let tokens = match (task.input_tokens, task.output_tokens) {
+            (Some(i), Some(o)) => format!("{}/{}", fmt_tokens_compact(i), fmt_tokens_compact(o)),
+            (Some(i), None) => format!("{}/—", fmt_tokens_compact(i)),
+            (None, Some(o)) => format!("—/{}", fmt_tokens_compact(o)),
+            (None, None) => "—".to_owned(),
+        };
+        let commit = task_commit_line(task);
+        out.push_str(&format!(
+            "{:<5} {:<10} {:<8} {:<11} {}\n",
+            task.id, task.status, time, tokens, commit
+        ));
+    }
+
+    out
+}
+
+fn render_summary_json(summary: &crate::summary::RunSummary) -> String {
+    use serde_json::{json, Value};
+
+    let wall = match (summary.wall_start, summary.wall_end) {
+        (Some(s), Some(e)) => json!({
+            "start": fmt_ts_summary(s),
+            "end": fmt_ts_summary(e),
+            "seconds": summary.wall_seconds,
+        }),
+        _ => Value::Null,
+    };
+
+    let tokens = if summary.any_tokens_recorded {
+        json!({
+            "input": summary.total_input_tokens,
+            "output": summary.total_output_tokens,
+        })
+    } else {
+        Value::Null
+    };
+
+    let tasks: Vec<Value> = summary
+        .tasks
+        .iter()
+        .map(|t| {
+            json!({
+                "id": t.id.to_string(),
+                "status": t.status.as_str(),
+                "duration_seconds": t.duration_seconds,
+                "duration_human": t.duration_seconds.map(fmt_duration_human),
+                "input_tokens": t.input_tokens,
+                "output_tokens": t.output_tokens,
+                "model": t.model,
+                "commit": task_commit_line(t),
+            })
+        })
+        .collect();
+
+    let doc = json!({
+        "headline": summary_headline(summary),
+        "wall_clock": wall,
+        "agent_time_seconds": summary.agent_seconds,
+        "overhead_seconds": summary.overhead_seconds,
+        "tokens": tokens,
+        "model": summary.model_label,
+        "counts": {
+            "complete": summary.counts.complete,
+            "failed": summary.counts.failed,
+            "pending": summary.counts.pending,
+            "running": summary.counts.running,
+        },
+        "tasks": tasks,
+    });
+
+    format!("{doc}\n")
 }

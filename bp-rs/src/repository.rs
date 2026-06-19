@@ -44,4 +44,6 @@ pub trait TaskRepository {
     fn read_plan(&self) -> Result<String, LoopError>;
     /// Contents of `.loop/agent-project.md` for agent prompt layering (project slice).
     fn read_agent_project(&self) -> Result<String, LoopError>;
+    /// Lifecycle audit events in chronological order.
+    fn list_events(&self) -> Result<Vec<crate::domain::Event>, LoopError>;
 }

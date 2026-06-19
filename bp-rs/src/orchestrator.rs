@@ -1,18 +1,25 @@
 //! Sequential `bp run` orchestration: prompt layering and agent subprocess boundary.
 
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
 use chrono::Utc;
 
+use crate::agent_stream::AgentUsageMetrics;
 use crate::domain::{
-    check_no_running_task, next_pending, transition_complete, transition_fail, transition_start,
-    CompletionData, DomainError, Task, TaskStatus,
+    check_no_running_task, merge_completion_metrics, next_pending, transition_complete,
+    transition_fail, transition_start, CompletionData, DomainError, Task, TaskStatus,
 };
 use crate::render::render_task_markdown;
 use crate::repository::{LoopError, TaskRepository};
 use crate::run_lock;
+
+/// Outcome of an agent subprocess invocation.
+pub struct AgentOutcome {
+    pub status: std::process::ExitStatus,
+    pub usage: AgentUsageMetrics,
+}
 
 /// Options for `bp run` (CLI flags with env fallbacks applied in `commands::run`).
 #[derive(Debug, Clone, Default)]
@@ -135,7 +142,8 @@ pub fn execute_run(repo: &dyn TaskRepository, project_root: &Path, config: &RunC
             continue;
         }
 
-        let status = match invoke_agent(&prompt, project_root, config) {
+        let git_head_before = git_head_short(project_root);
+        let outcome = match invoke_agent(&prompt, project_root, config) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("error: could not run agent subprocess — {e}");
@@ -143,11 +151,13 @@ pub fn execute_run(repo: &dyn TaskRepository, project_root: &Path, config: &RunC
             }
         };
 
-        let exit_detail = format_exit_detail(&status);
+        let exit_detail = format_exit_detail(&outcome.status);
 
-        if !status.success() {
+        if !outcome.status.success() {
             return fail_task_and_stop(repo, &task_id, &exit_detail);
         }
+
+        let commit_sha = git_commit_after_task(project_root, git_head_before.as_deref());
 
         let tasks_after = match repo.list_tasks() {
             Ok(t) => t,
@@ -162,6 +172,17 @@ pub fn execute_run(repo: &dyn TaskRepository, project_root: &Path, config: &RunC
             .find(|t| t.id.as_str() == task_id.as_str());
         match task_state.map(|t| t.status) {
             Some(TaskStatus::Complete) => {
+                if let Some(task) = task_state {
+                    if let Err(code) = patch_agent_metrics(
+                        repo,
+                        task,
+                        &outcome.usage,
+                        config.agent_model.as_deref(),
+                        commit_sha,
+                    ) {
+                        return code;
+                    }
+                }
                 println!("Task {task_id} complete.");
             }
             Some(TaskStatus::Running) => {
@@ -240,7 +261,7 @@ pub fn invoke_agent(
     prompt: &str,
     project_root: &Path,
     config: &RunConfig,
-) -> std::io::Result<std::process::ExitStatus> {
+) -> std::io::Result<AgentOutcome> {
     let bp_cmd = std::env::current_exe()
         .ok()
         .map(|p| p.display().to_string())
@@ -252,7 +273,7 @@ pub fn invoke_agent(
         .arg("-c")
         .arg(&script)
         .stdin(Stdio::piped())
-        .stdout(Stdio::inherit())
+        .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()?;
 
@@ -260,7 +281,18 @@ pub fn invoke_agent(
         stdin.write_all(prompt.as_bytes())?;
     }
 
-    child.wait()
+    let mut usage = AgentUsageMetrics::default();
+    if let Some(stdout) = child.stdout.take() {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            let line = line?;
+            println!("{line}");
+            usage.absorb_line(&line);
+        }
+    }
+
+    let status = child.wait()?;
+    Ok(AgentOutcome { status, usage })
 }
 
 fn agent_shell_and_script(bp_cmd: &str, config: &RunConfig) -> (String, String) {
@@ -278,7 +310,7 @@ fn agent_shell_and_script(bp_cmd: &str, config: &RunConfig) -> (String, String) 
                 .trim()
                 .to_ascii_lowercase();
             match backend.as_str() {
-                "claude" => default_claude_script(bp_cmd),
+                "claude" => default_claude_script(bp_cmd, config.agent_model.as_deref()),
                 _ => default_cursor_script(bp_cmd, config.agent_model.as_deref()),
             }
         }
@@ -290,16 +322,22 @@ fn default_cursor_script(bp_cmd: &str, agent_model: Option<&str>) -> String {
     let model_flag = agent_model
         .map(|m| format!(" --model \"{m}\""))
         .unwrap_or_default();
+    let model_env = agent_model
+        .map(|m| format!("BP_COMPLETE_MODEL=\"{m}\" "))
+        .unwrap_or_default();
     format!(
-        "prompt=\"$(cat)\"; cursor agent \"$prompt\"{model_flag} --print --force --trust --output-format text; \
-code=$?; if [ $code -eq 0 ]; then '{bp_cmd}' complete --if-running --notes \"completed via cursor backend\" || true; fi; exit $code"
+        "prompt=\"$(cat)\"; cursor agent \"$prompt\"{model_flag} --print --force --trust --output-format stream-json; \
+code=$?; if [ $code -eq 0 ]; then {model_env}'{bp_cmd}' complete --if-running --notes \"completed via cursor backend\" || true; fi; exit $code"
     )
 }
 
-fn default_claude_script(bp_cmd: &str) -> String {
+fn default_claude_script(bp_cmd: &str, agent_model: Option<&str>) -> String {
+    let model_env = agent_model
+        .map(|m| format!("BP_COMPLETE_MODEL=\"{m}\" "))
+        .unwrap_or_default();
     format!(
         "prompt=\"$(cat)\"; claude -p \"$prompt\" --verbose --output-format stream-json --dangerously-skip-permissions; \
-code=$?; if [ $code -eq 0 ]; then '{bp_cmd}' complete --if-running --notes \"completed via claude backend\" || true; fi; exit $code"
+code=$?; if [ $code -eq 0 ]; then {model_env}'{bp_cmd}' complete --if-running --notes \"completed via claude backend\" || true; fi; exit $code"
     )
 }
 
@@ -308,6 +346,71 @@ fn format_exit_detail(status: &std::process::ExitStatus) -> String {
         format!("exit code {code}")
     } else {
         "terminated without exit code".to_owned()
+    }
+}
+
+fn git_head_short(project_root: &Path) -> Option<String> {
+    Command::new("git")
+        .current_dir(project_root)
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .filter(|s| !s.is_empty())
+}
+
+fn git_commit_after_task(project_root: &Path, head_before: Option<&str>) -> Option<String> {
+    let head_after = git_head_short(project_root)?;
+    match head_before {
+        Some(before) if before == head_after.as_str() => None,
+        _ => Some(head_after),
+    }
+}
+
+fn patch_agent_metrics(
+    repo: &dyn TaskRepository,
+    task: &Task,
+    usage: &AgentUsageMetrics,
+    model_override: Option<&str>,
+    commit_sha: Option<String>,
+) -> Result<(), i32> {
+    let model = usage
+        .model
+        .clone()
+        .or_else(|| model_override.map(str::to_owned));
+    let patch = CompletionData {
+        notes: String::new(),
+        completed_at: task.completed_at.unwrap_or_else(Utc::now),
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        model,
+        commit_sha,
+    };
+
+    let needs_patch = task.input_tokens.is_none()
+        || task.output_tokens.is_none()
+        || task.model.is_none()
+        || task.commit_sha.is_none();
+    if !needs_patch && patch.input_tokens.is_none() && patch.output_tokens.is_none() {
+        return Ok(());
+    }
+
+    let merged = merge_completion_metrics(task.clone(), &patch);
+    if merged.input_tokens == task.input_tokens
+        && merged.output_tokens == task.output_tokens
+        && merged.model == task.model
+        && merged.commit_sha == task.commit_sha
+    {
+        return Ok(());
+    }
+
+    match repo.update_task(merged) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            eprintln!("error: could not persist agent metrics — {e}");
+            Err(2)
+        }
     }
 }
 
@@ -384,6 +487,9 @@ mod tests {
         fn read_agent_project(&self) -> Result<String, LoopError> {
             Ok(self.project.clone())
         }
+        fn list_events(&self) -> Result<Vec<crate::domain::Event>, LoopError> {
+            Ok(vec![])
+        }
     }
 
     #[test]
@@ -416,8 +522,16 @@ mod tests {
     }
 
     #[test]
+    fn default_cursor_script_uses_stream_json() {
+        let script = default_cursor_script("/usr/bin/bp", Some("composer-2.5"));
+        assert!(script.contains("--output-format stream-json"));
+        assert!(script.contains("BP_COMPLETE_MODEL=\"composer-2.5\""));
+    }
+
+    #[test]
     fn default_cursor_script_omits_model_when_unset() {
         let script = default_cursor_script("/usr/bin/bp", None);
         assert!(!script.contains("--model"));
+        assert!(!script.contains("BP_COMPLETE_MODEL"));
     }
 }

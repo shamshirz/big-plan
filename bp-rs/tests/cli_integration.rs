@@ -320,3 +320,105 @@ fn parse_error_ux_add_without_title() {
     assert!(stderr.contains("title is required"));
     assert!(stderr.contains("bp add"));
 }
+
+fn seed_completed_task(
+    dir: &Path,
+    id: &str,
+    seq: i64,
+    started: &str,
+    completed: &str,
+    duration: i64,
+    notes: &str,
+    commit_sha: Option<&str>,
+    input_tokens: Option<i64>,
+    output_tokens: Option<i64>,
+) {
+    let db = dir.join(".loop").join("loop.db");
+    let conn = rusqlite::Connection::open(&db).expect("open loop.db");
+    conn.execute(
+        "INSERT INTO tasks (id, seq, title, status, depends_on, created_at, started_at, \
+         completed_at, duration_seconds, completion_notes_md, input_tokens, output_tokens, \
+         model, commit_sha) \
+         VALUES (?1, ?2, ?3, 'complete', '[]', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![
+            id,
+            seq,
+            format!("task {id}"),
+            started,
+            started,
+            completed,
+            duration,
+            notes,
+            input_tokens,
+            output_tokens,
+            "composer-2.5",
+            commit_sha,
+        ],
+    )
+    .expect("seed task");
+}
+
+#[test]
+fn summary_reports_wall_clock_and_commits() {
+    let tmp = TempDir::new().expect("tempdir");
+    init_project(tmp.path());
+    seed_completed_task(
+        tmp.path(),
+        "001",
+        1,
+        "2026-06-17T02:21:29Z",
+        "2026-06-17T02:23:11Z",
+        102,
+        "Commit: abc1234 decompose build plan into bp queue",
+        Some("abc1234"),
+        None,
+        None,
+    );
+    seed_completed_task(
+        tmp.path(),
+        "002",
+        2,
+        "2026-06-17T02:25:00Z",
+        "2026-06-17T03:01:13Z",
+        346,
+        "Commit: f6d751c scaffold Phoenix app with SQLite at repo root",
+        Some("f6d751c"),
+        Some(1200),
+        Some(340),
+    );
+
+    let out = run_in(tmp.path(), &["summary"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let (stdout, _) = output_utf8(&out);
+    assert!(stdout.contains("Run summary (2 tasks complete)"));
+    assert!(stdout.contains("2026-06-17 02:21:29 → 2026-06-17 03:01:13 UTC"));
+    assert!(stdout.contains("Agent time:"));
+    assert!(stdout.contains("1.2k/340"));
+    assert!(stdout.contains("abc1234 decompose build plan"));
+    assert!(stdout.contains("f6d751c scaffold Phoenix"));
+}
+
+#[test]
+fn run_captures_stream_json_tokens_from_agent_stdout() {
+    let tmp = TempDir::new().expect("tempdir");
+    init_project(tmp.path());
+    assert!(run_in(tmp.path(), &["add", "metrics"]).status.success());
+    let exe = bp_bin().display().to_string();
+    let script = format!(
+        r#"printf '%s\n' '{{"type":"result","usage":{{"input_tokens":42,"output_tokens":7}}}}'; exec '{exe}' complete --if-running --notes 'with tokens'"#
+    );
+    let mut cmd = Command::new(bp_bin());
+    cmd.current_dir(tmp.path()).arg("run");
+    clear_run_env(&mut cmd);
+    cmd.env("BP_RUN_AGENT_SCRIPT", &script);
+    let out = cmd.output().expect("spawn run");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let show = run_in(tmp.path(), &["show", "001"]);
+    assert!(show.status.success());
+    let (detail, _) = output_utf8(&show);
+    assert!(detail.contains("Tokens in/out: 42 / 7"));
+}

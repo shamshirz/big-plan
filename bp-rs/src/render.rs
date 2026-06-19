@@ -107,6 +107,49 @@ fn fmt_ts(dt: DateTime<Utc>) -> String {
     dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
+/// Wall-clock display for `bp summary` (UTC).
+pub fn fmt_ts_summary(dt: DateTime<Utc>) -> String {
+    dt.format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+/// Human-readable duration: `5m 46s`, `39m 44s`, `1h 2m 3s`.
+pub fn fmt_duration_human(seconds: i64) -> String {
+    if seconds < 0 {
+        return format!("{seconds}s");
+    }
+    let h = seconds / 3600;
+    let m = (seconds % 3600) / 60;
+    let s = seconds % 60;
+    if h > 0 {
+        format!("{h}h {m}m {s}s")
+    } else if m > 0 {
+        format!("{m}m {s}s")
+    } else {
+        format!("{s}s")
+    }
+}
+
+/// Compact token count: `1.2M`, `340k`, `999`.
+pub fn fmt_tokens_compact(n: i64) -> String {
+    if n >= 1_000_000 {
+        let v = n as f64 / 1_000_000.0;
+        if (v - v.round()).abs() < 0.05 {
+            format!("{}M", v.round() as i64)
+        } else {
+            format!("{v:.1}M")
+        }
+    } else if n >= 1_000 {
+        let v = n as f64 / 1_000.0;
+        if (v - v.round()).abs() < 0.05 {
+            format!("{}k", v.round() as i64)
+        } else {
+            format!("{v:.1}k")
+        }
+    } else {
+        n.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,5 +325,19 @@ mod tests {
         task.input_tokens = Some(42);
         let out = render_task_detail(&task);
         assert!(out.contains("Tokens in/out: 42 / 0\n"));
+    }
+
+    #[test]
+    fn fmt_duration_human_examples() {
+        assert_eq!(fmt_duration_human(46), "46s");
+        assert_eq!(fmt_duration_human(346), "5m 46s");
+        assert_eq!(fmt_duration_human(2384), "39m 44s");
+    }
+
+    #[test]
+    fn fmt_tokens_compact_examples() {
+        assert_eq!(fmt_tokens_compact(999), "999");
+        assert_eq!(fmt_tokens_compact(340_000), "340k");
+        assert_eq!(fmt_tokens_compact(1_200_000), "1.2M");
     }
 }

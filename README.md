@@ -38,6 +38,7 @@ Help: `bp`, `bp -h`, and `bp --help` are equivalent.
 | `bp add "<title>"` | Add a pending task |
 | `bp status` | List tasks (id, status, title) |
 | `bp show <id>` | Full task detail |
+| `bp summary [--json] [--since <id>] [--last-run]` | Post-run report: wall clock, agent time, tokens, per-task commits |
 | `bp read plan` / `current` / `<id>` | Markdown for agents |
 | `bp run [--model <id>]` | Run pending tasks one-by-one (agent hook + layered prompt) |
 | `bp complete [--notes "..."] [--if-running]` | Mark the **running** task complete (`--if-running` no-ops silently) |
@@ -47,8 +48,10 @@ Help: `bp`, `bp -h`, and `bp --help` are equivalent.
 
 1. Next **pending** task becomes **running** and receives a prompt: **universal → `.loop/agent-project.md` → task markdown**.
 2. `bp run` runs **`$BP_RUN_AGENT_SHELL -c "$BP_RUN_AGENT_SCRIPT"`** with that prompt on the subprocess **stdin** (same pattern as `sh -c '… $(cat) …'`).
-3. When the child exits **0**, `bp` checks that the task was marked **complete** (typically the agent ran **`bp complete`** in the same project directory).
+3. When the child exits **0**, `bp` checks that the task was marked **complete** (typically the agent ran **`bp complete`** in the same project directory). Default **cursor** and **claude** backends use **`--output-format stream-json`**; `bp run` parses the final `result` event for token usage and merges **model** / **commit** into the task when the agent did not set `BP_COMPLETE_*`.
 4. On failure exit code, the task is marked **failed** and `bp run` stops.
+
+After a multi-task queue finishes, run **`bp summary`** for wall-clock span, per-task timing, tokens, and one-line commits (no manual SQLite).
 
 ### Environment variables
 
@@ -59,7 +62,7 @@ Help: `bp`, `bp -h`, and `bp --help` are equivalent.
 | **`BP_AGENT_MODEL`** | Cursor model id for `bp run` when `--model` is not passed (e.g. `composer-2.5`). |
 | **`BP_RUN_AGENT_SHELL`** | Shell (default `sh`). `LOOP_RUN_AGENT_SHELL` still works. |
 | **`BP_RUN_AGENT_SCRIPT`** | Full override script passed to `shell -c` (advanced). `LOOP_RUN_AGENT_SCRIPT` still works. |
-| **`BP_COMPLETE_*`** | Optional metrics when completing (see `commands.rs`): `INPUT_TOKENS`, `OUTPUT_TOKENS`, `MODEL`, `COMMIT_SHA`. `LOOP_COMPLETE_*` still accepted. |
+| **`BP_COMPLETE_*`** | Optional metrics when completing (see `commands.rs`): `INPUT_TOKENS`, `OUTPUT_TOKENS`, `MODEL`, `COMMIT_SHA`. `LOOP_COMPLETE_*` still accepted. Overrides orchestrator-parsed values when set. |
 
 ### Example: Cursor Agent
 

@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 
-use crate::domain::{validate_title, EventType, Task, TaskId, TaskStatus};
+use crate::domain::{validate_title, Event, EventMetadata, EventType, Task, TaskId, TaskStatus};
 use crate::repository::{LoopError, TaskRepository};
 
 const LATEST_VERSION: i32 = 1;
@@ -281,6 +281,23 @@ impl TaskRepository for SqliteRepository {
         let path = self.loop_dir.join("agent-project.md");
         std::fs::read_to_string(&path).map_err(|e| LoopError::Io(e.to_string()))
     }
+
+    fn list_events(&self) -> Result<Vec<crate::domain::Event>, LoopError> {
+        let conn = self.open()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, task_id, event_type, timestamp, metadata_json \
+                 FROM events ORDER BY timestamp ASC, id ASC",
+            )
+            .map_err(|e| LoopError::Io(e.to_string()))?;
+
+        let mut rows = stmt.query([]).map_err(|e| LoopError::Io(e.to_string()))?;
+        let mut events = Vec::new();
+        while let Some(row) = rows.next().map_err(|e| LoopError::Io(e.to_string()))? {
+            events.push(row_to_event(row).map_err(|e| LoopError::Io(e.to_string()))?);
+        }
+        Ok(events)
+    }
 }
 
 // --- Helpers ---
@@ -321,6 +338,27 @@ fn infer_event_type(from: TaskStatus, to: TaskStatus) -> Option<EventType> {
         (_, TaskStatus::Pending) => Some(EventType::Reset),
         _ => None,
     }
+}
+
+fn row_to_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<Event> {
+    let id: i64 = row.get("id")?;
+    let task_id_str: String = row.get("task_id")?;
+    let event_type_str: String = row.get("event_type")?;
+    let timestamp_str: String = row.get("timestamp")?;
+    let _metadata_json: String = row.get("metadata_json")?;
+
+    let task_id = TaskId::parse(&task_id_str)
+        .map_err(|e| rusqlite::Error::InvalidColumnName(e.to_string()))?;
+    let event_type = EventType::parse(&event_type_str)
+        .map_err(|e| rusqlite::Error::InvalidColumnName(e.to_string()))?;
+
+    Ok(Event {
+        id: Some(id),
+        task_id,
+        event_type,
+        timestamp: parse_ts(&timestamp_str),
+        metadata: EventMetadata::Empty,
+    })
 }
 
 fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {

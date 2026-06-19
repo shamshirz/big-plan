@@ -1,3 +1,4 @@
+pub mod agent_stream;
 pub mod cli;
 pub mod commands;
 pub mod domain;
@@ -6,6 +7,7 @@ pub mod render;
 pub mod repository;
 pub mod run_lock;
 pub mod sqlite_repo;
+pub mod summary;
 
 use cli::{Command, ParseError, ReadTarget};
 use repository::TaskRepository;
@@ -79,5 +81,10 @@ fn dispatch(cmd: Command, repo: &dyn TaskRepository, cwd: &std::path::Path) -> i
             commands::complete(repo, notes.as_deref(), if_running)
         }
         Command::Reset { id } => commands::reset(repo, &id),
+        Command::Summary {
+            json,
+            since,
+            last_run,
+        } => commands::summary(repo, json, since.as_deref(), last_run),
     }
 }
